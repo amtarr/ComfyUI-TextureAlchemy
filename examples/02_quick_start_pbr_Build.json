@@ -1,0 +1,1441 @@
+{
+  "id": "4be63e2b-d4c6-4e38-9116-5baf6cee45c3",
+  "revision": 0,
+  "last_node_id": 38,
+  "last_link_id": 51,
+  "nodes": [
+    {
+      "id": 10,
+      "type": "MarigoldModelLoader",
+      "pos": [
+        60.65904778142301,
+        364.3128888125582
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "marigold_model",
+          "type": "MARIGOLDMODEL",
+          "links": [
+            11
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-marigold",
+        "ver": "2adfec75c430b0751a98a82453dc2dd8077bca85",
+        "Node name for S&R": "MarigoldModelLoader"
+      },
+      "widgets_values": [
+        "prs-eth/marigold-iid-appearance-v1-1"
+      ]
+    },
+    {
+      "id": 11,
+      "type": "MarigoldModelLoader",
+      "pos": [
+        59.36626329796269,
+        485.7304531897718
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "marigold_model",
+          "type": "MARIGOLDMODEL",
+          "links": [
+            12
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-marigold",
+        "ver": "2adfec75c430b0751a98a82453dc2dd8077bca85",
+        "Node name for S&R": "MarigoldModelLoader"
+      },
+      "widgets_values": [
+        "prs-eth/marigold-iid-lighting-v1-1"
+      ]
+    },
+    {
+      "id": 2,
+      "type": "MarigoldDepthEstimation_v2",
+      "pos": [
+        442.8489972441105,
+        -40.10219477208679
+      ],
+      "size": [
+        315,
+        246
+      ],
+      "flags": {},
+      "order": 13,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "marigold_model",
+          "type": "MARIGOLDMODEL",
+          "link": 11
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            3
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-marigold",
+        "ver": "2adfec75c430b0751a98a82453dc2dd8077bca85",
+        "Node name for S&R": "MarigoldDepthEstimation_v2"
+      },
+      "widgets_values": [
+        123,
+        "fixed",
+        12,
+        4,
+        768,
+        "DDIMScheduler",
+        false,
+        false
+      ]
+    },
+    {
+      "id": 3,
+      "type": "MarigoldDepthEstimation_v2",
+      "pos": [
+        455.0056076536678,
+        281.4642759502574
+      ],
+      "size": [
+        315,
+        246
+      ],
+      "flags": {},
+      "order": 14,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "marigold_model",
+          "type": "MARIGOLDMODEL",
+          "link": 12
+        },
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "link": 2
+        }
+      ],
+      "outputs": [
+        {
+          "name": "image",
+          "type": "IMAGE",
+          "links": [
+            4
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfyui-marigold",
+        "ver": "2adfec75c430b0751a98a82453dc2dd8077bca85",
+        "Node name for S&R": "MarigoldDepthEstimation_v2"
+      },
+      "widgets_values": [
+        123,
+        "fixed",
+        12,
+        4,
+        768,
+        "DDIMScheduler",
+        false,
+        false
+      ]
+    },
+    {
+      "id": 12,
+      "type": "Note",
+      "pos": [
+        839.9022416957488,
+        402.23952442114916
+      ],
+      "size": [
+        354.090548768795,
+        174.96872801855034
+      ],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "title": "Understanding Gamma and Marigold",
+      "properties": {},
+      "widgets_values": [
+        "textures that are saved Save are stored in a gamma-corrected (non-linear) space—commonly using a gamma of 2.2. \n\nMarigold Lighting model assumes Linear color space and produces maps in linear . Applying a correction of ~ 0.45 will correct for darkened images, and effectively linearize the output. \n\nMarigold appearance model ( rougness and metallic) Assumes SRGB Space , we need to account for this by adjusting the gamma to 2.2\n\nGamma Values can be changed but not necessary to adjust for Remix purposes. "
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 15,
+      "type": "LotusSampler",
+      "pos": [
+        586.2919449356497,
+        684.3699240154774
+      ],
+      "size": [
+        272.087890625,
+        150
+      ],
+      "flags": {},
+      "order": 18,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "lotus_unet",
+          "type": "LOTUSUNET",
+          "link": 13
+        },
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 16
+        }
+      ],
+      "outputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "links": [
+            17
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ComfyUI-Lotus",
+        "ver": "dcd5bea7a418717a6e0c27a5f607058cb9c24a5e",
+        "Node name for S&R": "LotusSampler"
+      },
+      "widgets_values": [
+        123,
+        "fixed",
+        1024,
+        false
+      ]
+    },
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [
+        23.89894992903347,
+        -16.77528735334252
+      ],
+      "size": [
+        315,
+        314
+      ],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            1,
+            2,
+            14,
+            21
+          ]
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "metalwall065f_diffuse.png",
+        "image"
+      ]
+    },
+    {
+      "id": 22,
+      "type": "LotusSampler",
+      "pos": [
+        581.9957565785495,
+        1038.337067269249
+      ],
+      "size": [
+        272.087890625,
+        150
+      ],
+      "flags": {},
+      "order": 19,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "lotus_unet",
+          "type": "LOTUSUNET",
+          "link": 25
+        },
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 20
+        }
+      ],
+      "outputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "links": [
+            23
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ComfyUI-Lotus",
+        "ver": "dcd5bea7a418717a6e0c27a5f607058cb9c24a5e",
+        "Node name for S&R": "LotusSampler"
+      },
+      "widgets_values": [
+        123,
+        "fixed",
+        1024,
+        false
+      ]
+    },
+    {
+      "id": 18,
+      "type": "Note",
+      "pos": [
+        -9.486640783412039,
+        1042.8441509293366
+      ],
+      "size": [
+        276.5834508091059,
+        88
+      ],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        " Lotus-D is faster and more efficient for tasks requiring direct depth regression, while Lotus-G may be preferred when higher detail and quality are prioritized, especially in complex scenes.\n The disparity-based model is  where stability and accuracy are critical."
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 4,
+      "type": "PBRExtractor",
+      "pos": [
+        850,
+        100
+      ],
+      "size": [
+        350,
+        250
+      ],
+      "flags": {},
+      "order": 17,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "marigold_appearance",
+          "type": "IMAGE",
+          "link": 3
+        },
+        {
+          "name": "marigold_lighting",
+          "type": "IMAGE",
+          "link": 4
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "links": [
+            27
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRExtractor"
+      },
+      "widgets_values": [
+        "lighting",
+        0.45,
+        2,
+        0.45
+      ]
+    },
+    {
+      "id": 19,
+      "type": "Note",
+      "pos": [
+        584.8615244084106,
+        879.5915555226759
+      ],
+      "size": [
+        242.97393688238492,
+        88
+      ],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Per batch - 1-4096. Larger numbers take up more vram but run faster "
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 24,
+      "type": "VAEDecode",
+      "pos": [
+        873.6001095418977,
+        1038.4117232320755
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {},
+      "order": 21,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 23
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 24
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            44
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "VAEDecode"
+      }
+    },
+    {
+      "id": 31,
+      "type": "Note",
+      "pos": [
+        1058.2679726115744,
+        1153.3880872829532
+      ],
+      "size": [
+        275.1532921581303,
+        92.29058070343274
+      ],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Lotus appears to generate in OGL, so we can flip the channel . To also keep consistency in 8 bit , we can normalize the 32 bit output . "
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 28,
+      "type": "AOApproximator",
+      "pos": [
+        1397.29247399013,
+        643.0764493876803
+      ],
+      "size": [
+        270,
+        174
+      ],
+      "flags": {},
+      "order": 23,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "height",
+          "type": "IMAGE",
+          "link": 46
+        },
+        {
+          "name": "normal",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 34
+        }
+      ],
+      "outputs": [
+        {
+          "name": "ao",
+          "type": "IMAGE",
+          "links": [
+            37
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "AOApproximator"
+      },
+      "widgets_values": [
+        8,
+        1,
+        16,
+        1,
+        true
+      ]
+    },
+    {
+      "id": 17,
+      "type": "VAEEncode",
+      "pos": [
+        373.19296366448486,
+        704.5210182513919
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {},
+      "order": 15,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pixels",
+          "type": "IMAGE",
+          "link": 14
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 15
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            16
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "VAEEncode"
+      }
+    },
+    {
+      "id": 23,
+      "type": "VAEEncode",
+      "pos": [
+        371.0420656591007,
+        1068.6123213214928
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {},
+      "order": 16,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pixels",
+          "type": "IMAGE",
+          "link": 21
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 22
+        }
+      ],
+      "outputs": [
+        {
+          "name": "LATENT",
+          "type": "LATENT",
+          "links": [
+            20
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "VAEEncode"
+      }
+    },
+    {
+      "id": 16,
+      "type": "LoadLotusModel",
+      "pos": [
+        0.03293227944155608,
+        676.5350182823355
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "lotus_unet",
+          "type": "LOTUSUNET",
+          "links": [
+            13
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ComfyUI-Lotus",
+        "ver": "dcd5bea7a418717a6e0c27a5f607058cb9c24a5e",
+        "Node name for S&R": "LoadLotusModel"
+      },
+      "widgets_values": [
+        "lotus\\lotus-depth-g-v2-1-disparity-fp16.safetensors",
+        "fp32"
+      ]
+    },
+    {
+      "id": 14,
+      "type": "VAELoader",
+      "pos": [
+        -1.2390108372782471,
+        807.77914997063
+      ],
+      "size": [
+        270,
+        58
+      ],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "VAE",
+          "type": "VAE",
+          "links": [
+            15,
+            18,
+            22,
+            24
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "VAELoader"
+      },
+      "widgets_values": [
+        "lotus\\vae-ft-mse-840000-ema-pruned.safetensors"
+      ]
+    },
+    {
+      "id": 25,
+      "type": "LoadLotusModel",
+      "pos": [
+        -2.8193207208637343,
+        917.9415160177432
+      ],
+      "size": [
+        270,
+        82
+      ],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [
+        {
+          "name": "lotus_unet",
+          "type": "LOTUSUNET",
+          "links": [
+            25
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "ComfyUI-Lotus",
+        "ver": "dcd5bea7a418717a6e0c27a5f607058cb9c24a5e",
+        "Node name for S&R": "LoadLotusModel"
+      },
+      "widgets_values": [
+        "lotus\\lotus-normal-d-v1-0.safetensors",
+        "fp32"
+      ]
+    },
+    {
+      "id": 32,
+      "type": "Note",
+      "pos": [
+        1404.046158260098,
+        876.4405032948105
+      ],
+      "size": [
+        275.1532921581303,
+        92.29058070343274
+      ],
+      "flags": {},
+      "order": 10,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "This tool allows you to quickly create an AO map . ITs not as accurate as SSAO , but is nearly instant and very usefuul . "
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 20,
+      "type": "VAEDecode",
+      "pos": [
+        903.8305772042421,
+        690.60568284752
+      ],
+      "size": [
+        140,
+        46
+      ],
+      "flags": {},
+      "order": 20,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "samples",
+          "type": "LATENT",
+          "link": 17
+        },
+        {
+          "name": "vae",
+          "type": "VAE",
+          "link": 18
+        }
+      ],
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [
+            46,
+            47
+          ]
+        }
+      ],
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "VAEDecode"
+      }
+    },
+    {
+      "id": 29,
+      "type": "PBRNormalProcessor",
+      "pos": [
+        1041.19749881532,
+        1022.325805002657
+      ],
+      "size": [
+        292.0650390625,
+        82
+      ],
+      "flags": {},
+      "order": 22,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "normal_map",
+          "type": "IMAGE",
+          "link": 44
+        }
+      ],
+      "outputs": [
+        {
+          "name": "normal",
+          "type": "IMAGE",
+          "links": [
+            34,
+            48
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRNormalProcessor"
+      },
+      "widgets_values": [
+        true,
+        true
+      ]
+    },
+    {
+      "id": 36,
+      "type": "Note",
+      "pos": [
+        2044.3994199608999,
+        622.0073404165731
+      ],
+      "size": [
+        288.66850614838677,
+        213.07036989228504
+      ],
+      "flags": {},
+      "order": 11,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "Ao Albedo strenth can add a little detail back into the albedo map without affecting lighting . \nTurn on Ao rougness strngth to isure more of a mat feel in the darker areas / \nRoughness/ metallic strenth = HIgher values , brighter + more contrast . Lower values = Darker \nNOrmal Strenth = Lower values = flatten , higher = increase \nAlbedo Dimmer = In 3D pipelines, no color is ever at 100% brightness. Standard pipelines reccomend 0.8 ( 80% brightness) this way your materai's other attributes shine thorugh \n"
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 34,
+      "type": "PBRPipePreview",
+      "pos": [
+        2439.0358768467904,
+        441.46177538154296
+      ],
+      "size": [
+        169.083984375,
+        46
+      ],
+      "flags": {},
+      "order": 27,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "link": 40
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "links": [
+            49
+          ]
+        },
+        {
+          "name": "preview_batch",
+          "type": "IMAGE",
+          "links": [
+            42
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRPipePreview"
+      }
+    },
+    {
+      "id": 27,
+      "type": "PBRCombiner",
+      "pos": [
+        1781.9126148918922,
+        612.773496558523
+      ],
+      "size": [
+        161.07421875,
+        166
+      ],
+      "flags": {},
+      "order": 24,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pbr_pipe",
+          "shape": 7,
+          "type": "PBR_PIPE",
+          "link": 27
+        },
+        {
+          "name": "albedo",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "normal",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 48
+        },
+        {
+          "name": "ao",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 37
+        },
+        {
+          "name": "height",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": 47
+        },
+        {
+          "name": "roughness",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "metallic",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        },
+        {
+          "name": "transparency",
+          "shape": 7,
+          "type": "IMAGE",
+          "link": null
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "links": [
+            38,
+            50
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRCombiner"
+      }
+    },
+    {
+      "id": 37,
+      "type": "PBRPipePreview",
+      "pos": [
+        2452.411457970365,
+        281.04002235405477
+      ],
+      "size": [
+        169.083984375,
+        46
+      ],
+      "flags": {},
+      "order": 26,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "link": 50
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "links": []
+        },
+        {
+          "name": "preview_batch",
+          "type": "IMAGE",
+          "links": [
+            51
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRPipePreview"
+      }
+    },
+    {
+      "id": 33,
+      "type": "PBRPipelineAdjuster",
+      "pos": [
+        2044.3572735866512,
+        327.5980889257481
+      ],
+      "size": [
+        290.09375,
+        250
+      ],
+      "flags": {},
+      "order": 25,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "link": 38
+        }
+      ],
+      "outputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "links": [
+            40
+          ]
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRPipelineAdjuster"
+      },
+      "widgets_values": [
+        2,
+        1,
+        1,
+        1,
+        1,
+        false,
+        false,
+        0.2,
+        1.2
+      ]
+    },
+    {
+      "id": 38,
+      "type": "PreviewImage",
+      "pos": [
+        2643.0242864832467,
+        293.3897733353882
+      ],
+      "size": [
+        258.24085842887325,
+        286.7728140655514
+      ],
+      "flags": {},
+      "order": 28,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 51
+        }
+      ],
+      "outputs": [],
+      "title": "Before Adjustment",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    },
+    {
+      "id": 5,
+      "type": "PBRSaver",
+      "pos": [
+        3219.361714194602,
+        418.3822464836109
+      ],
+      "size": [
+        350,
+        250
+      ],
+      "flags": {
+        "collapsed": false
+      },
+      "order": 29,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "pbr_pipe",
+          "type": "PBR_PIPE",
+          "link": 49
+        }
+      ],
+      "outputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "links": []
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "PBRSaver"
+      },
+      "widgets_values": [
+        "my_material",
+        "pbr_materials",
+        "png",
+        "enumerate",
+        1
+      ]
+    },
+    {
+      "id": 13,
+      "type": "Note",
+      "pos": [
+        3225.0065925959816,
+        719.3638791412602
+      ],
+      "size": [
+        357.05414408787874,
+        163.15453588305934
+      ],
+      "flags": {},
+      "order": 12,
+      "mode": 0,
+      "inputs": [],
+      "outputs": [],
+      "properties": {},
+      "widgets_values": [
+        "base_name = the name of your material \noutput_path = a subfolder in your output directory\nfile format = for Remix , choose PNG to take advantage of Alpha capabilities and export maps in a supported remix format of 8 bit depth \nEnurmeration Mode = Enumerate ( +1 to the file version number ) or Overwrite ( replace last existing ) \nStarting number = When to start enumerating "
+      ],
+      "color": "#432",
+      "bgcolor": "#653"
+    },
+    {
+      "id": 35,
+      "type": "PreviewImage",
+      "pos": [
+        2913.4958704568785,
+        301.01902773310366
+      ],
+      "size": [
+        262.8278648695964,
+        290.3403032465541
+      ],
+      "flags": {},
+      "order": 30,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 42
+        }
+      ],
+      "outputs": [],
+      "title": "After Adjustment",
+      "properties": {
+        "cnr_id": "comfy-core",
+        "ver": "0.3.66",
+        "Node name for S&R": "PreviewImage"
+      },
+      "widgets_values": []
+    }
+  ],
+  "links": [
+    [
+      1,
+      1,
+      0,
+      2,
+      1,
+      "IMAGE"
+    ],
+    [
+      2,
+      1,
+      0,
+      3,
+      1,
+      "IMAGE"
+    ],
+    [
+      3,
+      2,
+      0,
+      4,
+      0,
+      "IMAGE"
+    ],
+    [
+      4,
+      3,
+      0,
+      4,
+      1,
+      "IMAGE"
+    ],
+    [
+      11,
+      10,
+      0,
+      2,
+      0,
+      "MARIGOLDMODEL"
+    ],
+    [
+      12,
+      11,
+      0,
+      3,
+      0,
+      "MARIGOLDMODEL"
+    ],
+    [
+      13,
+      16,
+      0,
+      15,
+      0,
+      "LOTUSUNET"
+    ],
+    [
+      14,
+      1,
+      0,
+      17,
+      0,
+      "IMAGE"
+    ],
+    [
+      15,
+      14,
+      0,
+      17,
+      1,
+      "VAE"
+    ],
+    [
+      16,
+      17,
+      0,
+      15,
+      1,
+      "LATENT"
+    ],
+    [
+      17,
+      15,
+      0,
+      20,
+      0,
+      "LATENT"
+    ],
+    [
+      18,
+      14,
+      0,
+      20,
+      1,
+      "VAE"
+    ],
+    [
+      20,
+      23,
+      0,
+      22,
+      1,
+      "LATENT"
+    ],
+    [
+      21,
+      1,
+      0,
+      23,
+      0,
+      "IMAGE"
+    ],
+    [
+      22,
+      14,
+      0,
+      23,
+      1,
+      "VAE"
+    ],
+    [
+      23,
+      22,
+      0,
+      24,
+      0,
+      "LATENT"
+    ],
+    [
+      24,
+      14,
+      0,
+      24,
+      1,
+      "VAE"
+    ],
+    [
+      25,
+      25,
+      0,
+      22,
+      0,
+      "LOTUSUNET"
+    ],
+    [
+      27,
+      4,
+      0,
+      27,
+      0,
+      "PBR_PIPE"
+    ],
+    [
+      34,
+      29,
+      0,
+      28,
+      1,
+      "IMAGE"
+    ],
+    [
+      37,
+      28,
+      0,
+      27,
+      3,
+      "IMAGE"
+    ],
+    [
+      38,
+      27,
+      0,
+      33,
+      0,
+      "PBR_PIPE"
+    ],
+    [
+      40,
+      33,
+      0,
+      34,
+      0,
+      "PBR_PIPE"
+    ],
+    [
+      42,
+      34,
+      1,
+      35,
+      0,
+      "IMAGE"
+    ],
+    [
+      44,
+      24,
+      0,
+      29,
+      0,
+      "IMAGE"
+    ],
+    [
+      46,
+      20,
+      0,
+      28,
+      0,
+      "IMAGE"
+    ],
+    [
+      47,
+      20,
+      0,
+      27,
+      4,
+      "IMAGE"
+    ],
+    [
+      48,
+      29,
+      0,
+      27,
+      2,
+      "IMAGE"
+    ],
+    [
+      49,
+      34,
+      0,
+      5,
+      0,
+      "PBR_PIPE"
+    ],
+    [
+      50,
+      27,
+      0,
+      37,
+      0,
+      "PBR_PIPE"
+    ],
+    [
+      51,
+      37,
+      1,
+      38,
+      0,
+      "IMAGE"
+    ]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {
+    "ds": {
+      "scale": 0.39142513012204144,
+      "offset": [
+        2674.8088435097225,
+        1817.2770239785127
+      ]
+    },
+    "frontendVersion": "1.28.7"
+  },
+  "version": 0.4
+}

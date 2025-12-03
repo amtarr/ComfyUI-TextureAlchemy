@@ -1,0 +1,196 @@
+{
+  "last_node_id": 10,
+  "last_link_id": 12,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [100, 300],
+      "size": [320, 314],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {"name": "IMAGE", "type": "IMAGE", "links": [1], "shape": 3}
+      ],
+      "properties": {},
+      "widgets_values": ["texture.png", "image"],
+      "title": "Load Base Texture"
+    },
+    {
+      "id": 2,
+      "type": "EdgeWearMaskGenerator",
+      "pos": [500, 100],
+      "size": [350, 350],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "outputs": [
+        {"name": "mask", "type": "IMAGE", "links": [2], "shape": 3}
+      ],
+      "properties": {},
+      "widgets_values": [
+        1024, 1024,
+        0.15,
+        3.0,
+        15.0,
+        0.4,
+        12345
+      ],
+      "title": "Edge Wear Mask"
+    },
+    {
+      "id": 3,
+      "type": "DirtGrimeMaskGenerator",
+      "pos": [500, 500],
+      "size": [350, 350],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "outputs": [
+        {"name": "mask", "type": "IMAGE", "links": [3], "shape": 3}
+      ],
+      "properties": {},
+      "widgets_values": [
+        1024, 1024,
+        0.4,
+        25.0,
+        0.7,
+        1.2,
+        67890
+      ],
+      "title": "Dirt/Grime Mask"
+    },
+    {
+      "id": 4,
+      "type": "GradientMaskGenerator",
+      "pos": [500, 900],
+      "size": [350, 400],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "outputs": [
+        {"name": "mask", "type": "IMAGE", "links": [4], "shape": 3}
+      ],
+      "properties": {},
+      "widgets_values": [
+        1024, 1024,
+        "radial",
+        0.0,
+        0.5,
+        0.3,
+        0.2,
+        20.0,
+        false,
+        11111
+      ],
+      "title": "Gradient Mask (Vignette)"
+    },
+    {
+      "id": 5,
+      "type": "ColorSelectionMask",
+      "pos": [500, 1350],
+      "size": [350, 250],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "inputs": [
+        {"name": "image", "type": "IMAGE", "link": 1}
+      ],
+      "outputs": [
+        {"name": "mask", "type": "IMAGE", "links": [5], "shape": 3}
+      ],
+      "properties": {},
+      "widgets_values": [
+        "#8B4513",
+        0.3,
+        0.1,
+        "hsv",
+        false
+      ],
+      "title": "Color Selection (Brown tones)"
+    },
+    {
+      "id": 6,
+      "type": "PreviewImage",
+      "pos": [950, 100],
+      "size": [400, 400],
+      "flags": {},
+      "order": 5,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 2}
+      ],
+      "properties": {},
+      "title": "Edge Wear Preview"
+    },
+    {
+      "id": 7,
+      "type": "PreviewImage",
+      "pos": [950, 550],
+      "size": [400, 400],
+      "flags": {},
+      "order": 6,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 3}
+      ],
+      "properties": {},
+      "title": "Dirt/Grime Preview"
+    },
+    {
+      "id": 8,
+      "type": "PreviewImage",
+      "pos": [950, 1000],
+      "size": [400, 400],
+      "flags": {},
+      "order": 7,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 4}
+      ],
+      "properties": {},
+      "title": "Gradient Preview"
+    },
+    {
+      "id": 9,
+      "type": "PreviewImage",
+      "pos": [950, 1450],
+      "size": [400, 400],
+      "flags": {},
+      "order": 8,
+      "mode": 0,
+      "inputs": [
+        {"name": "images", "type": "IMAGE", "link": 5}
+      ],
+      "properties": {},
+      "title": "Color Selection Preview"
+    },
+    {
+      "id": 10,
+      "type": "Note",
+      "pos": [100, 700],
+      "size": [350, 500],
+      "flags": {},
+      "order": 9,
+      "mode": 0,
+      "properties": {},
+      "widgets_values": [
+        "MASK GENERATION SHOWCASE\n\n🎭 This workflow demonstrates all 4 mask generators:\n\n1️⃣ EDGE WEAR MASK\n- Generates procedural edge damage\n- Use for paint chipping, wear\n- Adjust edge_width & sharpness\n- Add noise for variation\n\n2️⃣ DIRT/GRIME MASK\n- Procedural dirt accumulation\n- Focuses on crevices (if AO provided)\n- Multi-scale noise patterns\n- Control density & scale\n\n3️⃣ GRADIENT MASK\n- 5 types: linear, radial, angle, diamond, square\n- Perfect for vignettes\n- Can add noise overlay\n- Control center position\n\n4️⃣ COLOR SELECTION MASK\n- Select by color range\n- 3 modes: RGB, HSV, luminance\n- Like Photoshop's color range\n- Tolerance & feather controls\n\n💡 USE THESE MASKS FOR:\n- Material weathering\n- Selective editing\n- Blend layer masks\n- Effect application\n- Inpainting guides\n\n🔧 NEXT STEPS:\n- Use masks with Multi-Texture Blender\n- Apply to PBR Pipeline Adjuster\n- Save masks for external use\n- Combine multiple masks\n\n⚡ PRO TIPS:\n- Adjust seed for different variations\n- Use higher resolution for detail\n- Combine masks with blend modes\n- Invert masks as needed"
+      ],
+      "title": "📖 Mask Generation Guide"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 5, 0, "IMAGE"],
+    [2, 2, 0, 6, 0, "IMAGE"],
+    [3, 3, 0, 7, 0, "IMAGE"],
+    [4, 4, 0, 8, 0, "IMAGE"],
+    [5, 5, 0, 9, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
+

@@ -1,0 +1,130 @@
+{
+  "last_node_id": 5,
+  "last_link_id": 4,
+  "nodes": [
+    {
+      "id": 1,
+      "type": "LoadImage",
+      "pos": [100, 200],
+      "size": [320, 314],
+      "flags": {},
+      "order": 0,
+      "mode": 0,
+      "outputs": [
+        {
+          "name": "IMAGE",
+          "type": "IMAGE",
+          "links": [1, 2],
+          "shape": 3
+        },
+        {
+          "name": "MASK",
+          "type": "MASK",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {
+        "Node name for S&R": "LoadImage"
+      },
+      "widgets_values": [
+        "normal_map.png",
+        "image"
+      ],
+      "title": "Load Normal Map"
+    },
+    {
+      "id": 2,
+      "type": "NormalFormatValidator",
+      "pos": [500, 200],
+      "size": [400, 150],
+      "flags": {},
+      "order": 1,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "normal_map",
+          "type": "IMAGE",
+          "link": 1
+        }
+      ],
+      "outputs": [
+        {
+          "name": "visualization",
+          "type": "IMAGE",
+          "links": [3],
+          "shape": 3
+        },
+        {
+          "name": "detected_format",
+          "type": "STRING",
+          "links": null,
+          "shape": 3
+        }
+      ],
+      "properties": {},
+      "widgets_values": [],
+      "title": "Validate Format"
+    },
+    {
+      "id": 3,
+      "type": "PreviewImage",
+      "pos": [500, 400],
+      "size": [400, 400],
+      "flags": {},
+      "order": 2,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 2
+        }
+      ],
+      "properties": {},
+      "title": "Original Normal Map"
+    },
+    {
+      "id": 4,
+      "type": "PreviewImage",
+      "pos": [1000, 200],
+      "size": [800, 500],
+      "flags": {},
+      "order": 3,
+      "mode": 0,
+      "inputs": [
+        {
+          "name": "images",
+          "type": "IMAGE",
+          "link": 3
+        }
+      ],
+      "properties": {},
+      "title": "Format Analysis (4 Panels)"
+    },
+    {
+      "id": 5,
+      "type": "Note",
+      "pos": [100, 600],
+      "size": [700, 600],
+      "flags": {},
+      "order": 4,
+      "mode": 0,
+      "properties": {},
+      "widgets_values": [
+        "NORMAL FORMAT VALIDATOR TEST WORKFLOW\n\n🎯 PURPOSE:\n- Automatically detect if a normal map is OpenGL or DirectX format\n- Visual analysis of green channel distribution\n- Helpful for debugging \"inverted\" looking normals\n\n📊 HOW IT WORKS:\nAnalyzes the green (Y) channel:\n- OpenGL: Y points UP → more pixels > 0.5\n- DirectX: Y points DOWN → more pixels < 0.5\n\n🖼️ VISUALIZATION PANELS:\n1. **Original** - Your input normal map\n2. **Green Channel** - Isolated Y-axis direction\n3. **Threshold** - White=up (>0.5), Black=down (<0.5)\n4. **Format Indicator** - Color coded result:\n   • Green tint = OpenGL detected\n   • Red tint = DirectX detected\n   • Yellow tint = Ambiguous/unclear\n\n📈 CONSOLE OUTPUT:\nCheck your console for detailed analysis:\n```\n📊 GREEN CHANNEL ANALYSIS:\n  Mean: 0.612\n  Median: 0.634\n  Pixels > 0.5: 73.2% (up-facing)\n  Pixels < 0.5: 26.8% (down-facing)\n  Bias: +0.464\n\n🎯 DETECTION RESULT:\n  Format: OpenGL\n  Confidence: High\n  Reason: Green bias: +46.40%\n```\n\n🎚️ CONFIDENCE LEVELS:\n- **High** (>20% bias) - Very clear format distinction\n- **Medium** (10-20%) - Likely correct\n- **Low** (5-10%) - Uncertain result\n- **Ambiguous** (<5%) - Flat map or balanced normals\n\n✅ OPENGL FORMAT:\n• Green channel points UP (+Y)\n• Compatible with:\n  - Blender\n  - Unity\n  - Three.js\n  - Godot\n  - Most modern engines\n\n❌ DIRECTX FORMAT:\n• Green channel points DOWN (-Y)\n• Compatible with:\n  - Unreal Engine\n  - 3ds Max\n  - Maya\n  - Source Engine\n💡 Use \"Normal Format Converter\" to flip to OpenGL\n\n⚠️ AMBIGUOUS RESULTS:\nIf detection is uncertain, possible reasons:\n1. Normal map is mostly flat (little vertical detail)\n2. Equal distribution of up/down facing surfaces\n3. Non-standard or corrupted normal map\n4. Custom/artistic normal map\n\n🔧 WORKFLOW:\nLoad Normal Map\n   ↓\nNormal Format Validator\n   ↓\n   ├→ visualization (4 panels)\n   └→ detected_format (text)\n\n💡 PRO TIPS:\n- Use this before converting formats\n- Helps debug why normals look \"wrong\"\n- Educational tool for learning normal map formats\n- Great for QA in asset pipelines\n\n🔄 NEXT STEPS:\nIf format is wrong:\n1. Use \"Normal Format Converter (DX↔GL)\"\n2. Set correct conversion direction\n3. Validate again to confirm\n\nREFERENCE:\n- OpenGL uses +Y up (green=up)\n- DirectX uses +Y down (green=down)\n- This is the ONLY difference between formats!"
+      ],
+      "title": "📖 Documentation"
+    }
+  ],
+  "links": [
+    [1, 1, 0, 2, 0, "IMAGE"],
+    [2, 1, 0, 3, 0, "IMAGE"],
+    [3, 2, 0, 4, 0, "IMAGE"]
+  ],
+  "groups": [],
+  "config": {},
+  "extra": {},
+  "version": 0.4
+}
+
