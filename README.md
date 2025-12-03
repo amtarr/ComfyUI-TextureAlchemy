@@ -77,6 +77,7 @@ Your custom PBR extractors
 
 #### 1. **PBR Extractor (Marigold)**
 Extracts PBR maps from Marigold AI outputs into a PBR_PIPE.
+Needs the Marigold model loader from [ComfyUI-Marigold ]([url](https://github.com/kijai/ComfyUI-Marigold))
 
 **Inputs:**
 - `marigold_appearance` - Marigold output (appearance model)
@@ -1375,8 +1376,9 @@ Internal dictionary structure:
 - imageio (format support)
 
 **Optional for source inputs:**
-- ComfyUI_Marigold (PBR extraction)
-- ComfyUI_Lotus (normal/height generation)
+- [ComfyUI_Marigold- kijai](https://github.com/kijai/ComfyUI-Marigold)
+- [ComfyUI_Lotus -kijai](https://github.com/kijai/ComfyUI-Lotus)
+
 
 
 
