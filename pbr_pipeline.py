@@ -771,25 +771,35 @@ class PBRSaver:
         
         # Collect all available maps into a batch for preview
         image_batch = []
-        map_order = ["albedo", "normal", "ao", "height", "roughness", "metallic", "transparency"]
+        map_order = ["albedo", "normal", "ao", "height", "roughness", "metallic", "transparency", "emission"]
         
         for map_name in map_order:
             if maps[map_name] is not None:
                 img = maps[map_name]
                 
-                # Normalize all images to RGB (3 channels) for preview batch compatibility
-                if img.shape[-1] == 4:
-                    # Has alpha channel - drop it for preview
-                    img = img[:, :, :, :3]
-                    print(f"  Preview: Converted {map_name} from RGBA to RGB")
-                elif img.shape[-1] == 1:
+                # Handle different channel counts
+                if img.shape[-1] == 1:
                     # Grayscale - convert to RGB
-                    img = img.repeat(1, 1, 1, 3)
+                    img_rgb = img.repeat(1, 1, 1, 3)
+                    image_batch.append(img_rgb)
+                    
+                elif img.shape[-1] == 3:
+                    # RGB - use as is
+                    image_batch.append(img)
+                    
+                elif img.shape[-1] == 4:
+                    # RGBA - add RGB and alpha separately so you can see both
+                    img_rgb = img[:, :, :, :3]
+                    img_alpha = img[:, :, :, 3:4].repeat(1, 1, 1, 3)  # Alpha as RGB grayscale
+                    
+                    image_batch.append(img_rgb)
+                    image_batch.append(img_alpha)
+                    print(f"  Preview: Added {map_name} RGB + Alpha channel separately")
+                    
                 elif img.shape[-1] > 4:
                     # More than 4 channels - take first 3
-                    img = img[:, :, :, :3]
-                
-                image_batch.append(img)
+                    img_rgb = img[:, :, :, :3]
+                    image_batch.append(img_rgb)
         
         # If we have images, concatenate them into a batch
         if image_batch:
@@ -851,19 +861,35 @@ class PBRPipePreview:
                 if img.dim() == 3:
                     img = img.unsqueeze(0)
                 
-                # Ensure 3 channels for display (normalize all to RGB)
+                # Handle different channel counts
                 original_channels = img.shape[-1]
-                if img.shape[-1] == 1:
-                    img = img.repeat(1, 1, 1, 3)
-                elif img.shape[-1] >= 4:
-                    # Has alpha channel or more - drop it for preview
-                    img = img[:, :, :, :3]
                 
-                image_batch.append(img)
-                if original_channels == 4:
-                    print(f"✓ Added {map_name}: {img.shape} (RGBA -> RGB for preview)")
-                else:
+                if img.shape[-1] == 1:
+                    # Grayscale - convert to RGB
+                    img_rgb = img.repeat(1, 1, 1, 3)
+                    image_batch.append(img_rgb)
+                    print(f"✓ Added {map_name}: {img_rgb.shape}")
+                    
+                elif img.shape[-1] == 3:
+                    # RGB - use as is
+                    image_batch.append(img)
                     print(f"✓ Added {map_name}: {img.shape}")
+                    
+                elif img.shape[-1] == 4:
+                    # RGBA - add RGB and alpha separately
+                    img_rgb = img[:, :, :, :3]
+                    img_alpha = img[:, :, :, 3:4].repeat(1, 1, 1, 3)  # Convert alpha to RGB grayscale
+                    
+                    image_batch.append(img_rgb)
+                    image_batch.append(img_alpha)
+                    print(f"✓ Added {map_name} RGB: {img_rgb.shape}")
+                    print(f"✓ Added {map_name} Alpha: {img_alpha.shape}")
+                    
+                elif img.shape[-1] > 4:
+                    # More than 4 channels - take first 3
+                    img_rgb = img[:, :, :, :3]
+                    image_batch.append(img_rgb)
+                    print(f"✓ Added {map_name}: {img_rgb.shape} (trimmed from {original_channels} channels)")
         
         # Concatenate all images into a batch
         if image_batch:
