@@ -796,6 +796,275 @@ class NormalFormatValidator:
         return visualization
 
 
+class NormalIntensity:
+    """
+    Adjust normal map intensity/strength
+    Blends between flat normal (0,0,1) and the actual normal
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "normal": ("IMAGE",),
+                "intensity": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Normal intensity (0.0=flat, 1.0=original, >1.0=enhanced)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("normal",)
+    FUNCTION = "adjust_intensity"
+    CATEGORY = "Texture Alchemist/Normal"
+    
+    def adjust_intensity(self, normal, intensity):
+        """Adjust normal map intensity"""
+        
+        print("\n" + "="*60)
+        print("Normal Intensity Adjuster")
+        print("="*60)
+        print(f"Input shape: {normal.shape}")
+        print(f"Intensity: {intensity}")
+        
+        if intensity == 1.0:
+            print("✓ Intensity is 1.0, no change needed")
+            print("="*60 + "\n")
+            return (normal,)
+        
+        # Convert from [0,1] to [-1,1] range
+        normal_unpacked = normal * 2.0 - 1.0
+        
+        # Flat normal is (0, 0, 1) in tangent space
+        flat = torch.tensor([0.0, 0.0, 1.0], device=normal.device, dtype=normal.dtype)
+        flat = flat.view(1, 1, 1, 3)
+        
+        # Interpolate: result = flat + (normal - flat) * intensity
+        # When intensity = 0: result = flat
+        # When intensity = 1: result = normal
+        # When intensity > 1: exaggerated normal
+        normal_adjusted = flat + (normal_unpacked - flat) * intensity
+        
+        # Normalize the vectors
+        length = torch.sqrt(torch.sum(normal_adjusted * normal_adjusted, dim=-1, keepdim=True))
+        length = torch.clamp(length, min=1e-6)
+        normal_adjusted = normal_adjusted / length
+        
+        # Convert back to [0,1] range
+        result = normal_adjusted * 0.5 + 0.5
+        
+        print(f"✓ Normal intensity adjusted")
+        print(f"  Output range: [{result.min():.3f}, {result.max():.3f}]")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
+class SharpenNormal:
+    """
+    Sharpen normal maps to enhance detail
+    Uses unsharp mask technique in tangent space
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "normal": ("IMAGE",),
+                "strength": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 5.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Sharpening strength"
+                }),
+                "radius": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 10.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Blur radius for unsharp mask"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("normal",)
+    FUNCTION = "sharpen"
+    CATEGORY = "Texture Alchemist/Normal"
+    
+    def sharpen(self, normal, strength, radius):
+        """Sharpen normal map"""
+        
+        print("\n" + "="*60)
+        print("Normal Sharpener")
+        print("="*60)
+        print(f"Input shape: {normal.shape}")
+        print(f"Strength: {strength}")
+        print(f"Radius: {radius}")
+        
+        if strength == 0.0:
+            print("✓ Strength is 0.0, no sharpening applied")
+            print("="*60 + "\n")
+            return (normal,)
+        
+        # Convert to tangent space [-1,1]
+        normal_unpacked = normal * 2.0 - 1.0
+        
+        # Create Gaussian blur kernel
+        kernel_size = int(radius * 4) + 1
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        
+        # Create 1D Gaussian kernel
+        sigma = radius
+        x = torch.arange(kernel_size, dtype=normal.dtype, device=normal.device) - kernel_size // 2
+        gauss = torch.exp(-(x ** 2) / (2 * sigma ** 2))
+        gauss = gauss / gauss.sum()
+        
+        # Convert to 2D kernel
+        kernel_2d = gauss.unsqueeze(0) * gauss.unsqueeze(1)
+        kernel_2d = kernel_2d / kernel_2d.sum()
+        
+        # Apply blur to each channel separately
+        normal_bchw = normal_unpacked.permute(0, 3, 1, 2)
+        blurred_channels = []
+        
+        for i in range(3):
+            channel = normal_bchw[:, i:i+1, :, :]
+            kernel = kernel_2d.view(1, 1, kernel_size, kernel_size)
+            blurred = torch.nn.functional.conv2d(channel, kernel, padding=kernel_size//2)
+            blurred_channels.append(blurred)
+        
+        blurred = torch.cat(blurred_channels, dim=1)
+        blurred = blurred.permute(0, 2, 3, 1)
+        
+        # Unsharp mask: sharpened = original + (original - blurred) * strength
+        detail = normal_unpacked - blurred
+        sharpened = normal_unpacked + detail * strength
+        
+        # Normalize the vectors (very important for normals!)
+        length = torch.sqrt(torch.sum(sharpened * sharpened, dim=-1, keepdim=True))
+        length = torch.clamp(length, min=1e-6)
+        sharpened = sharpened / length
+        
+        # Convert back to [0,1] range
+        result = sharpened * 0.5 + 0.5
+        
+        print(f"✓ Normal map sharpened")
+        print(f"  Kernel size: {kernel_size}x{kernel_size}")
+        print(f"  Output range: [{result.min():.3f}, {result.max():.3f}]")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
+class SharpenDepth:
+    """
+    Sharpen depth/height maps to enhance detail
+    Uses unsharp mask technique
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "depth": ("IMAGE",),
+                "strength": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 5.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Sharpening strength"
+                }),
+                "radius": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 10.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Blur radius for unsharp mask"
+                }),
+                "clamp_output": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Clamp output to 0-1 range"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("depth",)
+    FUNCTION = "sharpen"
+    CATEGORY = "Texture Alchemist/Height"
+    
+    def sharpen(self, depth, strength, radius, clamp_output):
+        """Sharpen depth/height map"""
+        
+        print("\n" + "="*60)
+        print("Depth Sharpener")
+        print("="*60)
+        print(f"Input shape: {depth.shape}")
+        print(f"Strength: {strength}")
+        print(f"Radius: {radius}")
+        print(f"Clamp output: {clamp_output}")
+        
+        if strength == 0.0:
+            print("✓ Strength is 0.0, no sharpening applied")
+            print("="*60 + "\n")
+            return (depth,)
+        
+        # Create Gaussian blur kernel
+        kernel_size = int(radius * 4) + 1
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        
+        # Create 1D Gaussian kernel
+        sigma = radius
+        x = torch.arange(kernel_size, dtype=depth.dtype, device=depth.device) - kernel_size // 2
+        gauss = torch.exp(-(x ** 2) / (2 * sigma ** 2))
+        gauss = gauss / gauss.sum()
+        
+        # Convert to 2D kernel
+        kernel_2d = gauss.unsqueeze(0) * gauss.unsqueeze(1)
+        kernel_2d = kernel_2d / kernel_2d.sum()
+        
+        # Apply blur to each channel separately
+        depth_bchw = depth.permute(0, 3, 1, 2)
+        blurred_channels = []
+        
+        for i in range(depth.shape[-1]):
+            channel = depth_bchw[:, i:i+1, :, :]
+            kernel = kernel_2d.view(1, 1, kernel_size, kernel_size)
+            blurred = torch.nn.functional.conv2d(channel, kernel, padding=kernel_size//2)
+            blurred_channels.append(blurred)
+        
+        blurred = torch.cat(blurred_channels, dim=1)
+        blurred = blurred.permute(0, 2, 3, 1)
+        
+        # Unsharp mask: sharpened = original + (original - blurred) * strength
+        detail = depth - blurred
+        sharpened = depth + detail * strength
+        
+        # Clamp if requested
+        if clamp_output:
+            sharpened = torch.clamp(sharpened, 0.0, 1.0)
+        
+        print(f"✓ Depth map sharpened")
+        print(f"  Kernel size: {kernel_size}x{kernel_size}")
+        print(f"  Output range: [{sharpened.min():.3f}, {sharpened.max():.3f}]")
+        print("="*60 + "\n")
+        
+        return (sharpened,)
+
+
 NODE_CLASS_MAPPINGS = {
     "NormalMapCombiner": NormalMapCombiner,
     "LotusNormalProcessor": LotusNormalProcessor,
@@ -803,6 +1072,9 @@ NODE_CLASS_MAPPINGS = {
     "HeightToNormal": HeightToNormal,
     "NormalConverter": NormalConverter,
     "NormalFormatValidator": NormalFormatValidator,
+    "NormalIntensity": NormalIntensity,
+    "SharpenNormal": SharpenNormal,
+    "SharpenDepth": SharpenDepth,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -812,5 +1084,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeightToNormal": "Height to Normal Converter",
     "NormalConverter": "Normal Format Converter (DX↔GL)",
     "NormalFormatValidator": "Normal Format Validator (OGL vs DX)",
+    "NormalIntensity": "Normal Intensity Adjuster",
+    "SharpenNormal": "Sharpen Normal",
+    "SharpenDepth": "Sharpen Depth",
 }
 
