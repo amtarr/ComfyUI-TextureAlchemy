@@ -168,6 +168,10 @@ class PBRPipelineAdjuster:
                     "default": False,
                     "tooltip": "Invert transparency map"
                 }),
+                "embed_transparency": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Embed transparency map into albedo's alpha channel"
+                }),
                 
                 # Albedo controls
                 "albedo_dimmer": ("FLOAT", {
@@ -239,7 +243,7 @@ class PBRPipelineAdjuster:
     
     def adjust(self, pbr_pipe, ao_strength_albedo, ao_strength_roughness, roughness_strength, 
                metallic_strength, normal_strength, invert_normal_green, invert_transparency,
-               albedo_dimmer, albedo_saturation):
+               embed_transparency, albedo_dimmer, albedo_saturation):
         """Apply adjustments to PBR pipeline"""
         
         print("\n" + "="*60)
@@ -361,6 +365,35 @@ class PBRPipelineAdjuster:
                 transparency = 1.0 - transparency
                 print("✓ Transparency inverted")
                 print(f"  Transparency range: [{transparency.min():.3f}, {transparency.max():.3f}]")
+        
+        # ===== EMBED TRANSPARENCY INTO ALBEDO ALPHA =====
+        if albedo is not None and transparency is not None and embed_transparency:
+            # Convert transparency to grayscale if needed
+            trans_gray = transparency
+            if trans_gray.shape[-1] == 3:
+                weights = torch.tensor([0.299, 0.587, 0.114], 
+                                      device=trans_gray.device, dtype=trans_gray.dtype)
+                trans_gray = torch.sum(trans_gray * weights, dim=-1, keepdim=True)
+            
+            # Resize transparency to match albedo if needed
+            if trans_gray.shape[1:3] != albedo.shape[1:3]:
+                trans_gray = torch.nn.functional.interpolate(
+                    trans_gray.permute(0, 3, 1, 2),
+                    size=albedo.shape[1:3],
+                    mode='bilinear',
+                    align_corners=False
+                ).permute(0, 2, 3, 1)
+            
+            # Ensure albedo is RGB (3 channels)
+            if albedo.shape[-1] == 4:
+                albedo = albedo[:, :, :, :3]
+            elif albedo.shape[-1] == 1:
+                albedo = albedo.repeat(1, 1, 1, 3)
+            
+            # Concatenate transparency as alpha channel
+            albedo = torch.cat([albedo, trans_gray], dim=-1)
+            print("✓ Transparency embedded into albedo alpha channel")
+            print(f"  Albedo shape: {albedo.shape}")
         
         # Create output pipe
         output_pipe = {
@@ -798,6 +831,80 @@ class PBRPipePreview:
         return (pbr_pipe, preview_batch)
 
 
+class EmbedAlpha:
+    """
+    Embed an alpha image into another image's alpha channel
+    Takes a base image and an alpha image, outputs base with embedded alpha
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "base_image": ("IMAGE",),
+                "alpha_image": ("IMAGE",),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image_with_alpha",)
+    FUNCTION = "embed_alpha"
+    CATEGORY = "Texture Alchemist/Utilities"
+    
+    def embed_alpha(self, base_image, alpha_image):
+        """Embed alpha_image into base_image's alpha channel"""
+        
+        print("\n" + "="*60)
+        print("Embed Alpha")
+        print("="*60)
+        print(f"Base image shape: {base_image.shape}")
+        print(f"Alpha image shape: {alpha_image.shape}")
+        
+        # Convert alpha to grayscale if needed
+        alpha_gray = alpha_image
+        if alpha_gray.shape[-1] == 3:
+            weights = torch.tensor([0.299, 0.587, 0.114], 
+                                  device=alpha_gray.device, dtype=alpha_gray.dtype)
+            alpha_gray = torch.sum(alpha_gray * weights, dim=-1, keepdim=True)
+            print("✓ Alpha image converted to grayscale")
+        elif alpha_gray.shape[-1] == 4:
+            # If alpha_image has alpha, use it
+            alpha_gray = alpha_gray[:, :, :, 3:4]
+            print("✓ Using existing alpha channel from alpha_image")
+        
+        # Resize alpha to match base if needed
+        if alpha_gray.shape[1:3] != base_image.shape[1:3]:
+            alpha_gray = torch.nn.functional.interpolate(
+                alpha_gray.permute(0, 3, 1, 2),
+                size=base_image.shape[1:3],
+                mode='bilinear',
+                align_corners=False
+            ).permute(0, 2, 3, 1)
+            print(f"✓ Alpha resized to match base: {alpha_gray.shape[1:3]}")
+        
+        # Ensure base is RGB (3 channels)
+        base_rgb = base_image
+        if base_rgb.shape[-1] == 4:
+            base_rgb = base_rgb[:, :, :, :3]
+            print("✓ Removed existing alpha from base image")
+        elif base_rgb.shape[-1] == 1:
+            base_rgb = base_rgb.repeat(1, 1, 1, 3)
+            print("✓ Converted grayscale base to RGB")
+        elif base_rgb.shape[-1] > 4:
+            base_rgb = base_rgb[:, :, :, :3]
+            print("✓ Trimmed base image to RGB")
+        
+        # Concatenate alpha channel
+        result = torch.cat([base_rgb, alpha_gray], dim=-1)
+        
+        print(f"\n✓ Alpha embedded successfully")
+        print(f"  Output shape: {result.shape}")
+        print(f"  Alpha range: [{alpha_gray.min():.3f}, {alpha_gray.max():.3f}]")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
 class PBRMaterialMixer:
     """
     Mix/blend two complete PBR material pipes
@@ -935,6 +1042,7 @@ NODE_CLASS_MAPPINGS = {
     "PBRSaver": PBRSaver,
     "PBRPipePreview": PBRPipePreview,
     "PBRMaterialMixer": PBRMaterialMixer,
+    "EmbedAlpha": EmbedAlpha,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -944,5 +1052,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PBRSaver": "PBR Saver",
     "PBRPipePreview": "PBR Pipe Preview",
     "PBRMaterialMixer": "PBR Material Mixer",
+    "EmbedAlpha": "Embed Alpha",
 }
 
