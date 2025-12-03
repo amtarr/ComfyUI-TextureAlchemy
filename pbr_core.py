@@ -250,6 +250,15 @@ class PBRAdjuster:
                     "display": "number"
                 }),
                 "metallic_invert": ("BOOLEAN", {"default": False}),
+                
+                # Embed transparency option
+                "embed_transparency": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Embed transparency map into albedo's alpha channel"
+                }),
+            },
+            "optional": {
+                "transparency": ("IMAGE",),
             }
         }
     
@@ -279,7 +288,8 @@ class PBRAdjuster:
                albedo_brightness, albedo_contrast, albedo_invert,
                ao_brightness, ao_contrast, ao_invert,
                roughness_brightness, roughness_contrast, roughness_invert,
-               metallic_brightness, metallic_contrast, metallic_invert):
+               metallic_brightness, metallic_contrast, metallic_invert,
+               embed_transparency, transparency=None):
         """Adjust all PBR maps"""
         
         print("\n" + "="*60)
@@ -305,6 +315,35 @@ class PBRAdjuster:
         metallic_adj = self.adjust_map(metallic, metallic_brightness, metallic_contrast, metallic_invert)
         print(f"\nMetallic: brightness={metallic_brightness}, contrast={metallic_contrast}, invert={metallic_invert}")
         print(f"  Range: [{metallic_adj.min():.3f}, {metallic_adj.max():.3f}]")
+        
+        # ===== EMBED TRANSPARENCY INTO ALBEDO ALPHA =====
+        if transparency is not None and embed_transparency:
+            # Convert transparency to grayscale if needed
+            trans_gray = transparency
+            if trans_gray.shape[-1] == 3:
+                weights = torch.tensor([0.299, 0.587, 0.114], 
+                                      device=trans_gray.device, dtype=trans_gray.dtype)
+                trans_gray = torch.sum(trans_gray * weights, dim=-1, keepdim=True)
+            
+            # Resize transparency to match albedo if needed
+            if trans_gray.shape[1:3] != albedo_adj.shape[1:3]:
+                trans_gray = torch.nn.functional.interpolate(
+                    trans_gray.permute(0, 3, 1, 2),
+                    size=albedo_adj.shape[1:3],
+                    mode='bilinear',
+                    align_corners=False
+                ).permute(0, 2, 3, 1)
+            
+            # Ensure albedo is RGB (3 channels)
+            if albedo_adj.shape[-1] == 4:
+                albedo_adj = albedo_adj[:, :, :, :3]
+            elif albedo_adj.shape[-1] == 1:
+                albedo_adj = albedo_adj.repeat(1, 1, 1, 3)
+            
+            # Concatenate transparency as alpha channel
+            albedo_adj = torch.cat([albedo_adj, trans_gray], dim=-1)
+            print("\n✓ Transparency embedded into albedo alpha channel")
+            print(f"  Albedo shape: {albedo_adj.shape}")
         
         print("\n" + "="*60)
         print("✓ Adjustments Complete")
