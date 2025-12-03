@@ -1,18 +1,8 @@
-# 🧪 TextureAlchemy
+# TextureAlchemy
 
-```
-╔════════════════════════════════════════════════════════╗
-║                                                        ║
-║    ⚗️  T E X T U R E   A L C H E M Y  ⚗️               ║
-║                                                        ║
-║    Transform Images into Professional PBR Materials   ║
-║                                                        ║
-╚════════════════════════════════════════════════════════╝
-```
+Transform Images into complete material sets ready for game engines, 3D software, and rendering pipelines.*
 
-> *Like an alchemist turning lead into gold, TextureAlchemy transforms ordinary images into complete material sets ready for game engines, 3D software, and rendering pipelines.*
-
-Complete workflow suite for ComfyUI with 38 professional nodes. Extract, process, and enhance physically-based rendering textures with AI-powered alchemy.
+Complete workflow suite for ComfyUI. Extract, process, and enhance physically-based rendering textures with AI-powered alchemy.
 
 ---
 
@@ -1388,54 +1378,5 @@ Internal dictionary structure:
 - ComfyUI_Marigold (PBR extraction)
 - ComfyUI_Lotus (normal/height generation)
 
----
 
-## 📝 Version History
 
-**v2.1** (Current) - TextureAlchemy 🧪
-- 🎨 **Rebranded to TextureAlchemy**
-- ✨ **9 new nodes**: Texture Equalizer, Square Maker, Smart Texture Resizer + 6 channel nodes (Grayscale↔Color, ORMA, RMA, RMAA)
-- ✨ Texture Equalizer: Remove shadows/uneven lighting (High Pass + Linear Light technique)
-- ✨ Square Maker: Convert any image to square (crop or scale, 9 position options)
-- ✨ Smart Texture Resizer: Auto-optimize resolutions to GPU-friendly multiples
-- ✨ Texture Offset: Added edge mask output
-- ✨ Texture Tiler: Added scale_to_input mode (density preview)
-- ✨ Seamless Tiling: Added edge mask output
-- ✨ PBR Pipeline: Full emission map support (Combiner, Splitter, Saver, Preview)
-- ⚙️ Improved gamma controls (max: 3.0, better defaults)
-- 🐛 Fixed grid_sample padding mode issues
-- 📚 Enhanced documentation and branding
-- 📋 **38 total nodes**
-
-**v2.0**
-- ✨ Added 13 new nodes (26 total)
-- 🎨 Interactive Color Ramp with visual UI
-- ⚡ 100x faster Color Ramp (GPU acceleration)
-- 🛠️ Complete texture utilities suite
-- 🎯 Advanced effects (wear, curvature, detail)
-- 📦 Channel packing tools
-- 🔄 Material mixing system
-- 🎨 HSV color adjustment
-- 📚 Comprehensive documentation
-
-**v1.0**
-- 🚀 Initial release
-- 13 core nodes
-- Pipeline system
-- Basic color tools
-
----
-
-## 🌟 About TextureAlchemy
-
-**The art of transforming images into valuable materials.**
-
-TextureAlchemy combines AI-powered depth estimation with professional material processing tools to deliver game-ready, production-quality PBR textures. Whether you're creating tileable game textures, extracting materials from photos, or building custom material pipelines, TextureAlchemy provides the complete toolkit.
-
-**Clean, professional, production-ready!** 🚀
-
----
-
-*"Not all who process textures are lost in nodes."* — TextureAlchemy
-
-For examples, tutorials, and workflows, see the `examples/` folder.
