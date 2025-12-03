@@ -775,7 +775,21 @@ class PBRSaver:
         
         for map_name in map_order:
             if maps[map_name] is not None:
-                image_batch.append(maps[map_name])
+                img = maps[map_name]
+                
+                # Normalize all images to RGB (3 channels) for preview batch compatibility
+                if img.shape[-1] == 4:
+                    # Has alpha channel - drop it for preview
+                    img = img[:, :, :, :3]
+                    print(f"  Preview: Converted {map_name} from RGBA to RGB")
+                elif img.shape[-1] == 1:
+                    # Grayscale - convert to RGB
+                    img = img.repeat(1, 1, 1, 3)
+                elif img.shape[-1] > 4:
+                    # More than 4 channels - take first 3
+                    img = img[:, :, :, :3]
+                
+                image_batch.append(img)
         
         # If we have images, concatenate them into a batch
         if image_batch:
@@ -837,14 +851,19 @@ class PBRPipePreview:
                 if img.dim() == 3:
                     img = img.unsqueeze(0)
                 
-                # Ensure 3 channels for display
+                # Ensure 3 channels for display (normalize all to RGB)
+                original_channels = img.shape[-1]
                 if img.shape[-1] == 1:
                     img = img.repeat(1, 1, 1, 3)
-                elif img.shape[-1] > 3:
+                elif img.shape[-1] >= 4:
+                    # Has alpha channel or more - drop it for preview
                     img = img[:, :, :, :3]
                 
                 image_batch.append(img)
-                print(f"✓ Added {map_name}: {img.shape}")
+                if original_channels == 4:
+                    print(f"✓ Added {map_name}: {img.shape} (RGBA -> RGB for preview)")
+                else:
+                    print(f"✓ Added {map_name}: {img.shape}")
         
         # Concatenate all images into a batch
         if image_batch:
