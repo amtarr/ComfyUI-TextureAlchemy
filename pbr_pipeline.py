@@ -788,13 +788,25 @@ class PBRSaver:
                     image_batch.append(img)
                     
                 elif img.shape[-1] == 4:
-                    # RGBA - add RGB and alpha separately so you can see both
+                    # RGBA - composite over checkerboard to show transparency
                     img_rgb = img[:, :, :, :3]
-                    img_alpha = img[:, :, :, 3:4].repeat(1, 1, 1, 3)  # Alpha as RGB grayscale
+                    img_alpha = img[:, :, :, 3:4]
                     
-                    image_batch.append(img_rgb)
-                    image_batch.append(img_alpha)
-                    print(f"  Preview: Added {map_name} RGB + Alpha channel separately")
+                    # Create checkerboard pattern
+                    h, w = img.shape[1], img.shape[2]
+                    checker_size = max(16, min(h, w) // 32)
+                    
+                    y_coords = torch.arange(h, device=img.device).unsqueeze(1).expand(h, w)
+                    x_coords = torch.arange(w, device=img.device).unsqueeze(0).expand(h, w)
+                    checkerboard = ((y_coords // checker_size + x_coords // checker_size) % 2).float()
+                    checkerboard = checkerboard * 0.25 + 0.5  # Light/medium gray
+                    checkerboard = checkerboard.unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 3)
+                    
+                    # Composite: result = img_rgb * alpha + checkerboard * (1 - alpha)
+                    img_composited = img_rgb * img_alpha + checkerboard * (1.0 - img_alpha)
+                    
+                    image_batch.append(img_composited)
+                    print(f"  Preview: Added {map_name} (RGBA composited over checkerboard)")
                     
                 elif img.shape[-1] > 4:
                     # More than 4 channels - take first 3
@@ -876,14 +888,26 @@ class PBRPipePreview:
                     print(f"✓ Added {map_name}: {img.shape}")
                     
                 elif img.shape[-1] == 4:
-                    # RGBA - add RGB and alpha separately
+                    # RGBA - composite over checkerboard to show transparency
                     img_rgb = img[:, :, :, :3]
-                    img_alpha = img[:, :, :, 3:4].repeat(1, 1, 1, 3)  # Convert alpha to RGB grayscale
+                    img_alpha = img[:, :, :, 3:4]
                     
-                    image_batch.append(img_rgb)
-                    image_batch.append(img_alpha)
-                    print(f"✓ Added {map_name} RGB: {img_rgb.shape}")
-                    print(f"✓ Added {map_name} Alpha: {img_alpha.shape}")
+                    # Create checkerboard pattern (alternating dark/light squares)
+                    h, w = img.shape[1], img.shape[2]
+                    checker_size = max(16, min(h, w) // 32)  # Adaptive checker size
+                    
+                    # Create checkerboard using modulo
+                    y_coords = torch.arange(h, device=img.device).unsqueeze(1).expand(h, w)
+                    x_coords = torch.arange(w, device=img.device).unsqueeze(0).expand(h, w)
+                    checkerboard = ((y_coords // checker_size + x_coords // checker_size) % 2).float()
+                    checkerboard = checkerboard * 0.25 + 0.5  # Light gray (0.75) and medium gray (0.5)
+                    checkerboard = checkerboard.unsqueeze(0).unsqueeze(-1).repeat(1, 1, 1, 3)
+                    
+                    # Composite: result = img_rgb * alpha + checkerboard * (1 - alpha)
+                    img_composited = img_rgb * img_alpha + checkerboard * (1.0 - img_alpha)
+                    
+                    image_batch.append(img_composited)
+                    print(f"✓ Added {map_name} (RGBA composited over checkerboard): {img_composited.shape}")
                     
                 elif img.shape[-1] > 4:
                     # More than 4 channels - take first 3
