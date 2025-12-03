@@ -587,6 +587,25 @@ class PBRSaver:
             # Default to RGB, take first 3 channels
             return Image.fromarray(img_np[:, :, :3], mode='RGB')
     
+    def ensure_format_compatible(self, pil_image, file_format, map_type):
+        """Ensure PIL image is compatible with the target file format"""
+        # JPG doesn't support alpha channel
+        if file_format == "jpg" and pil_image.mode == "RGBA":
+            print(f"  ⚠ Warning: {map_type} has alpha channel, but JPG doesn't support it")
+            print(f"    Converting RGBA to RGB (compositing over white background)")
+            # Create white background
+            background = Image.new('RGB', pil_image.size, (255, 255, 255))
+            # Composite the image over white background
+            background.paste(pil_image, mask=pil_image.split()[3])  # Use alpha as mask
+            return background
+        
+        # Grayscale with JPG
+        if file_format == "jpg" and pil_image.mode == "L":
+            # Convert grayscale to RGB for JPG
+            return pil_image.convert('RGB')
+        
+        return pil_image
+    
     def find_next_number(self, output_dir, base_name, map_type, file_format, starting_number):
         """Find the next available number for enumeration"""
         number = starting_number
@@ -689,7 +708,7 @@ class PBRSaver:
                     
                     # Convert tensor to PIL Image
                     pil_image = self.tensor_to_pil(tensor)
-                    print(f"  PIL image size: {pil_image.size}")
+                    print(f"  PIL image size: {pil_image.size}, mode: {pil_image.mode}")
                     
                     # Generate filename
                     if enumeration_mode == "enumerate":
@@ -699,13 +718,19 @@ class PBRSaver:
                     
                     filepath = os.path.join(output_dir_str, filename)
                     
+                    # Ensure image is compatible with the target format
+                    pil_image = self.ensure_format_compatible(pil_image, file_format, map_type)
+                    
                     # Save with appropriate settings
                     if file_format == "png":
+                        # PNG supports alpha channel
                         pil_image.save(filepath, format='PNG', compress_level=4)
+                        if pil_image.mode == "RGBA":
+                            print(f"  ✓ Saved with alpha channel")
                     elif file_format == "jpg":
                         pil_image.save(filepath, format='JPEG', quality=95)
                     elif file_format == "exr":
-                        # For EXR, save as 32-bit float
+                        # For EXR, save as 32-bit float (supports alpha)
                         # Convert back to float numpy array
                         img_np = tensor[0].cpu().numpy()
                         img_np = np.clip(img_np, 0.0, 1.0)
@@ -714,13 +739,18 @@ class PBRSaver:
                         try:
                             import imageio
                             imageio.imwrite(filepath, img_np.astype(np.float32))
+                            if img_np.shape[-1] == 4:
+                                print(f"  ✓ Saved with alpha channel")
                         except ImportError:
                             print(f"  ⚠ Warning: imageio not available, saving {map_type} as PNG instead")
                             filename = f"{base_name}_{map_type}_{file_number:03d}.png"
                             filepath = os.path.join(output_dir_str, filename)
                             pil_image.save(filepath, format='PNG', compress_level=4)
                     elif file_format == "tiff":
+                        # TIFF supports alpha channel
                         pil_image.save(filepath, format='TIFF')
+                        if pil_image.mode == "RGBA":
+                            print(f"  ✓ Saved with alpha channel")
                     
                     saved_files.append(filename)
                     print(f"  ✓ Saved: {filename}")
