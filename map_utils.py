@@ -64,15 +64,15 @@ class LotusHeightProcessor:
 
 class AOApproximator:
     """
-    Generate Ambient Occlusion map from height and normal maps
-    Uses height sampling to detect concave areas that would be occluded
+    Generate Ambient Occlusion map from height and/or normal maps
+    - With height: Uses height sampling to detect concave areas that would be occluded
+    - Without height: Uses normal map orientation to approximate basic AO
     """
     
     @classmethod
     def INPUT_TYPES(cls):
         return {
             "required": {
-                "height": ("IMAGE",),
                 "radius": ("INT", {
                     "default": 8,
                     "min": 1,
@@ -111,6 +111,7 @@ class AOApproximator:
                 }),
             },
             "optional": {
+                "height": ("IMAGE",),
                 "normal": ("IMAGE",),
             },
         }
@@ -120,89 +121,114 @@ class AOApproximator:
     FUNCTION = "generate_ao"
     CATEGORY = "Texture Alchemist/Maps"
     
-    def generate_ao(self, height, radius, strength, samples, contrast, use_normal, normal=None):
-        """Generate AO from height map"""
+    def generate_ao(self, radius, strength, samples, contrast, use_normal, height=None, normal=None):
+        """Generate AO from height and/or normal map"""
         
         print("\n" + "="*60)
         print("AO Approximator")
         print("="*60)
-        print(f"Height shape: {height.shape}")
+        
+        # Check inputs
+        if height is None and normal is None:
+            print("⚠ Warning: No height or normal map provided, returning neutral AO")
+            # Create a neutral gray AO map (50% occlusion)
+            ao_rgb = torch.ones((1, 512, 512, 3), dtype=torch.float32) * 0.7
+            print("="*60 + "\n")
+            return (ao_rgb,)
+        
+        if height is not None:
+            print(f"Height shape: {height.shape}")
         if normal is not None:
             print(f"Normal shape: {normal.shape}")
         print(f"Radius: {radius}, Samples: {samples}, Strength: {strength}, Contrast: {contrast}")
         print(f"Use normal: {use_normal}")
         
-        # Convert height to grayscale if needed
-        height_map = height.clone()
-        if height_map.shape[-1] == 3:
-            weights = torch.tensor([0.299, 0.587, 0.114], 
-                                   device=height_map.device, dtype=height_map.dtype)
-            height_map = torch.sum(height_map * weights, dim=-1, keepdim=True)
-        elif height_map.shape[-1] != 1:
-            height_map = height_map[..., 0:1]
+        # Determine reference shape and device
+        if height is not None:
+            reference = height
+            batch, h, w, channels = height.shape
+        else:
+            reference = normal
+            batch, h, w, channels = normal.shape
         
-        batch, h, w, channels = height.shape
+        # Convert height to grayscale if needed
+        if height is not None:
+            height_map = height.clone()
+            if height_map.shape[-1] == 3:
+                weights = torch.tensor([0.299, 0.587, 0.114], 
+                                       device=height_map.device, dtype=height_map.dtype)
+                height_map = torch.sum(height_map * weights, dim=-1, keepdim=True)
+            elif height_map.shape[-1] != 1:
+                height_map = height_map[..., 0:1]
+        else:
+            height_map = None
         
         # Initialize AO map (start fully lit)
-        ao = torch.ones((batch, h, w, 1), device=height.device, dtype=height.dtype)
+        ao = torch.ones((batch, h, w, 1), device=reference.device, dtype=reference.dtype)
         
-        # Generate sampling angles
-        import math
-        angles = [2.0 * math.pi * i / samples for i in range(samples)]
-        
-        print(f"\n⚙ Computing AO with {samples} samples at radius {radius}...")
-        
-        # For each sampling direction
-        occlusion_sum = torch.zeros_like(ao)
-        
-        for angle in angles:
-            # Calculate offset
-            dx = int(round(math.cos(angle) * radius))
-            dy = int(round(math.sin(angle) * radius))
+        # If we have a height map, use height-based AO
+        if height_map is not None:
+            # Generate sampling angles
+            import math
+            angles = [2.0 * math.pi * i / samples for i in range(samples)]
             
-            # Skip if no offset
-            if dx == 0 and dy == 0:
-                continue
+            print(f"\n⚙ Computing AO with {samples} samples at radius {radius}...")
             
-            # Sample height at offset position (with boundary handling)
-            # Pad the height map to handle boundaries
-            pad_h = abs(dy) if dy != 0 else 0
-            pad_w = abs(dx) if dx != 0 else 0
+            # For each sampling direction
+            occlusion_sum = torch.zeros_like(ao)
             
-            # Use reflection padding
-            height_padded = torch.nn.functional.pad(
-                height_map.permute(0, 3, 1, 2),  # BHWC -> BCHW
-                (pad_w, pad_w, pad_h, pad_h),
-                mode='replicate'
-            ).permute(0, 2, 3, 1)  # BCHW -> BHWC
+            for angle in angles:
+                # Calculate offset
+                dx = int(round(math.cos(angle) * radius))
+                dy = int(round(math.sin(angle) * radius))
+                
+                # Skip if no offset
+                if dx == 0 and dy == 0:
+                    continue
+                
+                # Sample height at offset position (with boundary handling)
+                # Pad the height map to handle boundaries
+                pad_h = abs(dy) if dy != 0 else 0
+                pad_w = abs(dx) if dx != 0 else 0
+                
+                # Use reflection padding
+                height_padded = torch.nn.functional.pad(
+                    height_map.permute(0, 3, 1, 2),  # BHWC -> BCHW
+                    (pad_w, pad_w, pad_h, pad_h),
+                    mode='replicate'
+                ).permute(0, 2, 3, 1)  # BCHW -> BHWC
+                
+                # Calculate the sampling positions
+                y_start = max(0, dy) + pad_h
+                y_end = y_start + h
+                x_start = max(0, dx) + pad_w
+                x_end = x_start + w
+                
+                # Center position
+                center_y = pad_h
+                center_x = pad_w
+                
+                # Sample neighbor and center
+                neighbor_height = height_padded[:, y_start:y_end, x_start:x_end, :]
+                center_height = height_padded[:, center_y:center_y+h, center_x:center_x+w, :]
+                
+                # Calculate height difference (positive if neighbor is higher = occlusion)
+                height_diff = neighbor_height - center_height
+                
+                # Convert to occlusion (only positive differences contribute)
+                occlusion = torch.clamp(height_diff, 0.0, 1.0)
+                
+                occlusion_sum += occlusion
             
-            # Calculate the sampling positions
-            y_start = max(0, dy) + pad_h
-            y_end = y_start + h
-            x_start = max(0, dx) + pad_w
-            x_end = x_start + w
-            
-            # Center position
-            center_y = pad_h
-            center_x = pad_w
-            
-            # Sample neighbor and center
-            neighbor_height = height_padded[:, y_start:y_end, x_start:x_end, :]
-            center_height = height_padded[:, center_y:center_y+h, center_x:center_x+w, :]
-            
-            # Calculate height difference (positive if neighbor is higher = occlusion)
-            height_diff = neighbor_height - center_height
-            
-            # Convert to occlusion (only positive differences contribute)
-            occlusion = torch.clamp(height_diff, 0.0, 1.0)
-            
-            occlusion_sum += occlusion
-        
-        # Average the occlusion
-        if samples > 0:
-            occlusion_avg = occlusion_sum / samples
+            # Average the occlusion
+            if samples > 0:
+                occlusion_avg = occlusion_sum / samples
+            else:
+                occlusion_avg = occlusion_sum
         else:
-            occlusion_avg = occlusion_sum
+            # No height map - generate basic AO from normal orientation if available
+            print("\n⚙ No height map - generating basic AO from normal orientation...")
+            occlusion_avg = torch.zeros((batch, h, w, 1), device=reference.device, dtype=reference.dtype)
         
         # Apply strength
         occlusion_avg = occlusion_avg * strength
@@ -210,14 +236,38 @@ class AOApproximator:
         # Convert to AO (1.0 = no occlusion, 0.0 = full occlusion)
         ao = 1.0 - torch.clamp(occlusion_avg, 0.0, 1.0)
         
+        # If we don't have height but have normal, generate AO from normal map
+        if height_map is None and normal is not None:
+            print("✓ Generating AO from normal map orientation")
+            
+            if normal.shape[-1] >= 3:
+                # Use blue channel (Z/up direction) and curvature
+                normal_z = normal[..., 2:3]
+                
+                # Resize to match AO if needed
+                if normal_z.shape[1:3] != ao.shape[1:3]:
+                    normal_z = torch.nn.functional.interpolate(
+                        normal_z.permute(0, 3, 1, 2),
+                        size=ao.shape[1:3],
+                        mode='bilinear',
+                        align_corners=False
+                    ).permute(0, 2, 3, 1)
+                
+                # Generate AO based on surface orientation
+                # Faces pointing up (normal_z ~1.0) = bright (little AO)
+                # Faces pointing sideways/down (normal_z ~0.5 or less) = dark (more AO)
+                # Map range: 1.0 (up) -> 0.9 AO, 0.5 (sideways) -> 0.6 AO, 0.0 (down) -> 0.3 AO
+                ao = normal_z * 0.6 + 0.3
+                ao = torch.clamp(ao, 0.0, 1.0)
+        
         # Apply contrast
         if contrast != 1.0:
             ao = (ao - 0.5) * contrast + 0.5
             ao = torch.clamp(ao, 0.0, 1.0)
         
-        # Optional: Use normal map to bias AO
-        if use_normal and normal is not None:
-            print("✓ Applying normal-based bias")
+        # If we have both height-based AO and normal, use normal to enhance/bias
+        if height_map is not None and use_normal and normal is not None:
+            print("✓ Applying normal-based bias to height AO")
             
             # Convert normal to grayscale or use blue channel (up direction)
             if normal.shape[-1] >= 3:
