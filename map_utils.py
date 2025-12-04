@@ -302,14 +302,138 @@ class AOApproximator:
         return (ao_rgb,)
 
 
+class GammaAdjust:
+    """
+    Apply gamma correction to images
+    Gamma < 1.0 brightens, Gamma > 1.0 darkens
+    Common values: 0.45 (linear to sRGB), 2.2 (sRGB to linear)
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "gamma": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Gamma value (< 1.0 = brighten, > 1.0 = darken, 1.0 = no change)"
+                }),
+                "per_channel": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Apply gamma to each channel independently (useful for color correction)"
+                }),
+            },
+            "optional": {
+                "gamma_red": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Gamma for red channel (only used if per_channel is enabled)"
+                }),
+                "gamma_green": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Gamma for green channel (only used if per_channel is enabled)"
+                }),
+                "gamma_blue": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Gamma for blue channel (only used if per_channel is enabled)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "adjust_gamma"
+    CATEGORY = "Texture Alchemist/Adjustment"
+    
+    def adjust_gamma(self, image, gamma, per_channel, gamma_red=1.0, gamma_green=1.0, gamma_blue=1.0):
+        """Apply gamma correction to image"""
+        
+        print("\n" + "="*60)
+        print("Gamma Adjust")
+        print("="*60)
+        print(f"Input shape: {image.shape}")
+        print(f"Gamma: {gamma}")
+        print(f"Per channel: {per_channel}")
+        
+        # Check if we need to do anything
+        if not per_channel and gamma == 1.0:
+            print("✓ Gamma is 1.0, no adjustment needed")
+            print("="*60 + "\n")
+            return (image,)
+        
+        if per_channel and gamma_red == 1.0 and gamma_green == 1.0 and gamma_blue == 1.0:
+            print("✓ All channel gammas are 1.0, no adjustment needed")
+            print("="*60 + "\n")
+            return (image,)
+        
+        # Clamp input to valid range [0, 1]
+        image_clamped = torch.clamp(image, 0.0, 1.0)
+        
+        if per_channel and image.shape[-1] >= 3:
+            # Apply different gamma to each channel
+            print(f"  Red gamma: {gamma_red}")
+            print(f"  Green gamma: {gamma_green}")
+            print(f"  Blue gamma: {gamma_blue}")
+            
+            # Split channels
+            r = image_clamped[..., 0:1]
+            g = image_clamped[..., 1:2]
+            b = image_clamped[..., 2:3]
+            
+            # Apply gamma to each channel
+            r_adjusted = torch.pow(r, gamma_red)
+            g_adjusted = torch.pow(g, gamma_green)
+            b_adjusted = torch.pow(b, gamma_blue)
+            
+            # Recombine
+            result = torch.cat([r_adjusted, g_adjusted, b_adjusted], dim=-1)
+            
+            # If there was an alpha channel, preserve it
+            if image.shape[-1] == 4:
+                alpha = image_clamped[..., 3:4]
+                result = torch.cat([result, alpha], dim=-1)
+                print("  ✓ Alpha channel preserved")
+            elif image.shape[-1] > 4:
+                # Preserve extra channels
+                extra = image_clamped[..., 3:]
+                result = torch.cat([result, extra], dim=-1)
+        else:
+            # Apply same gamma to all channels
+            result = torch.pow(image_clamped, gamma)
+        
+        print(f"\n✓ Gamma correction applied")
+        print(f"  Input range: [{image.min():.3f}, {image.max():.3f}]")
+        print(f"  Output range: [{result.min():.3f}, {result.max():.3f}]")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "LotusHeightProcessor": LotusHeightProcessor,
     "AOApproximator": AOApproximator,
+    "GammaAdjust": GammaAdjust,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LotusHeightProcessor": "Height Processor (Lotus)",
     "AOApproximator": "AO Approximator",
+    "GammaAdjust": "Gamma Adjust",
 }
 
