@@ -256,6 +256,125 @@ class UVCheckerGenerator:
         return checker.unsqueeze(2).repeat(1, 1, 3)
 
 
+class ImageBitDepthChecker:
+    """
+    Check and display image bit depth information
+    Reports tensor dtype, effective bit depth, and memory usage
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING", "INT")
+    RETURN_NAMES = ("image", "bit_depth", "info", "memory_mb")
+    FUNCTION = "check_depth"
+    CATEGORY = "Texture Alchemist/Analysis"
+    OUTPUT_NODE = True
+    
+    def check_depth(self, image):
+        """Check image bit depth and properties"""
+        
+        print(f"\n{'='*60}")
+        print(f"IMAGE BIT DEPTH CHECKER")
+        print(f"{'='*60}")
+        
+        # Get tensor properties
+        dtype = image.dtype
+        shape = image.shape
+        batch, height, width, channels = shape
+        
+        # Determine bit depth from dtype
+        dtype_map = {
+            torch.float16: ("16-bit float (half precision)", 16),
+            torch.float32: ("32-bit float (single precision)", 32),
+            torch.float64: ("64-bit float (double precision)", 64),
+            torch.uint8: ("8-bit unsigned integer", 8),
+            torch.int8: ("8-bit signed integer", 8),
+            torch.int16: ("16-bit signed integer", 16),
+            torch.int32: ("32-bit signed integer", 32),
+            torch.int64: ("64-bit signed integer", 64),
+            torch.bfloat16: ("16-bit bfloat (brain float)", 16),
+        }
+        
+        dtype_name, bit_depth = dtype_map.get(dtype, ("Unknown dtype", 0))
+        
+        # Calculate memory usage
+        element_size = image.element_size()  # bytes per element
+        total_elements = batch * height * width * channels
+        memory_bytes = total_elements * element_size
+        memory_mb = memory_bytes / (1024 * 1024)
+        
+        # Analyze value range
+        min_val = image.min().item()
+        max_val = image.max().item()
+        
+        # Determine if values are normalized (0-1) or not
+        is_normalized = (min_val >= 0.0 and max_val <= 1.0)
+        
+        # Build report
+        report = []
+        report.append(f"🔍 BIT DEPTH ANALYSIS")
+        report.append(f"")
+        report.append(f"📦 TENSOR INFO:")
+        report.append(f"  Data Type: {dtype}")
+        report.append(f"  Bit Depth: {bit_depth}-bit")
+        report.append(f"  Description: {dtype_name}")
+        report.append(f"  Bytes/Element: {element_size}")
+        report.append(f"")
+        report.append(f"📐 DIMENSIONS:")
+        report.append(f"  Resolution: {width}×{height}")
+        report.append(f"  Channels: {channels}")
+        report.append(f"  Batch: {batch}")
+        report.append(f"  Total Elements: {total_elements:,}")
+        report.append(f"")
+        report.append(f"💾 MEMORY USAGE:")
+        report.append(f"  Memory: {memory_mb:.2f} MB")
+        report.append(f"  Per Image: {memory_mb/batch:.2f} MB")
+        report.append(f"")
+        report.append(f"📊 VALUE RANGE:")
+        report.append(f"  Min: {min_val:.6f}")
+        report.append(f"  Max: {max_val:.6f}")
+        report.append(f"  Normalized: {'✓ Yes (0-1 range)' if is_normalized else '✗ No'}")
+        report.append(f"")
+        report.append(f"💡 NOTES:")
+        if dtype == torch.float32:
+            report.append(f"  • Standard ComfyUI format (32-bit float)")
+            report.append(f"  • Full precision for processing")
+            report.append(f"  • Use EXR format to preserve on save")
+        elif dtype == torch.float16:
+            report.append(f"  • Half precision (saves memory)")
+            report.append(f"  • May lose some precision")
+            report.append(f"  • Good for inference")
+        elif dtype == torch.uint8:
+            report.append(f"  • 8-bit integer (256 values)")
+            report.append(f"  • Typical for loaded PNG/JPG images")
+            report.append(f"  • Convert to float32 for processing")
+        
+        if not is_normalized and dtype in [torch.float16, torch.float32, torch.float64]:
+            report.append(f"  ⚠ Warning: Values outside 0-1 range!")
+            report.append(f"    This may cause issues with some nodes")
+        
+        # Simple bit depth string output
+        bit_depth_str = f"{bit_depth}-bit"
+        
+        # Full info report
+        info_str = "\n".join(report)
+        
+        # Print to console
+        for line in report:
+            print(f"  {line}")
+        
+        print(f"{'='*60}\n")
+        
+        # Pass through the image unchanged
+        return (image, bit_depth_str, info_str, int(memory_mb))
+
+
 class TextureAtlasBuilder:
     """
     Combine multiple textures into a texture atlas
@@ -382,12 +501,14 @@ class TextureAtlasBuilder:
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "TextureAnalyzer": TextureAnalyzer,
+    "ImageBitDepthChecker": ImageBitDepthChecker,
     "UVCheckerGenerator": UVCheckerGenerator,
     "TextureAtlasBuilder": TextureAtlasBuilder,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "TextureAnalyzer": "Texture Analyzer",
+    "ImageBitDepthChecker": "Image Bit Depth Checker",
     "UVCheckerGenerator": "UV Checker Generator",
     "TextureAtlasBuilder": "Texture Atlas Builder",
 }
