@@ -526,9 +526,9 @@ class PBRSaver:
                     "default": "pbr_materials",
                     "tooltip": "Folder name inside ComfyUI/output (or full path if absolute)"
                 }),
-                "file_format": (["png", "jpg", "exr", "tiff"], {
+                "file_format": (["png", "png16", "jpg", "exr", "tiff"], {
                     "default": "png",
-                    "tooltip": "Image format (use EXR for 16/32-bit normals/height)"
+                    "tooltip": "Image format (png16/EXR for high bit depth)"
                 }),
                 "enumeration_mode": (["enumerate", "overwrite"], {
                     "default": "enumerate",
@@ -556,8 +556,8 @@ class PBRSaver:
         # Always execute (don't cache)
         return float("nan")
     
-    def tensor_to_pil(self, tensor):
-        """Convert tensor to PIL Image"""
+    def tensor_to_pil(self, tensor, bit_depth=8):
+        """Convert tensor to PIL Image with specified bit depth"""
         # Tensor is in [B, H, W, C] format
         # Take first batch
         if tensor.shape[0] > 1:
@@ -569,23 +569,34 @@ class PBRSaver:
         # Clamp to 0-1
         img_np = np.clip(img_np, 0.0, 1.0)
         
-        # Convert to 0-255
-        img_np = (img_np * 255).astype(np.uint8)
+        # Convert based on bit depth
+        if bit_depth == 16:
+            # 16-bit (0-65535)
+            img_np = (img_np * 65535).astype(np.uint16)
+        else:
+            # 8-bit (0-255)
+            img_np = (img_np * 255).astype(np.uint8)
         
-        # Convert to PIL
+        # Convert to PIL with appropriate mode
         if img_np.shape[-1] == 1:
             # Grayscale
             img_np = img_np[:, :, 0]
-            return Image.fromarray(img_np, mode='L')
+            mode = 'I;16' if bit_depth == 16 else 'L'
+            pil_image = Image.fromarray(img_np, mode=mode)
         elif img_np.shape[-1] == 3:
             # RGB
-            return Image.fromarray(img_np, mode='RGB')
+            mode = 'RGB'
+            pil_image = Image.fromarray(img_np, mode=mode)
         elif img_np.shape[-1] == 4:
             # RGBA
-            return Image.fromarray(img_np, mode='RGBA')
+            mode = 'RGBA'
+            pil_image = Image.fromarray(img_np, mode=mode)
         else:
             # Default to RGB, take first 3 channels
-            return Image.fromarray(img_np[:, :, :3], mode='RGB')
+            mode = 'RGB'
+            pil_image = Image.fromarray(img_np[:, :, :3], mode=mode)
+        
+        return pil_image
     
     def ensure_format_compatible(self, pil_image, file_format, map_type):
         """Ensure PIL image is compatible with the target file format"""
@@ -608,9 +619,12 @@ class PBRSaver:
     
     def find_next_number(self, output_dir, base_name, map_type, file_format, starting_number):
         """Find the next available number for enumeration"""
+        # png16 saves as .png extension
+        ext = "png" if file_format == "png16" else file_format
+        
         number = starting_number
         while True:
-            filename = f"{base_name}_{map_type}_{number:03d}.{file_format}"
+            filename = f"{base_name}_{map_type}_{number:03d}.{ext}"
             filepath = os.path.join(output_dir, filename)
             if not os.path.exists(filepath):
                 return number
@@ -706,15 +720,19 @@ class PBRSaver:
                     print(f"  Tensor shape: {tensor.shape}")
                     print(f"  Tensor type: {tensor.dtype}")
                     
+                    # Determine bit depth based on format
+                    bit_depth = 16 if file_format == "png16" else 8
+                    
                     # Convert tensor to PIL Image
-                    pil_image = self.tensor_to_pil(tensor)
+                    pil_image = self.tensor_to_pil(tensor, bit_depth=bit_depth)
                     print(f"  PIL image size: {pil_image.size}, mode: {pil_image.mode}")
                     
-                    # Generate filename
+                    # Generate filename (png16 saves as .png)
+                    actual_ext = "png" if file_format == "png16" else file_format
                     if enumeration_mode == "enumerate":
-                        filename = f"{base_name}_{map_type}_{file_number:03d}.{file_format}"
+                        filename = f"{base_name}_{map_type}_{file_number:03d}.{actual_ext}"
                     else:
-                        filename = f"{base_name}_{map_type}.{file_format}"
+                        filename = f"{base_name}_{map_type}.{actual_ext}"
                     
                     filepath = os.path.join(output_dir_str, filename)
                     
@@ -722,9 +740,13 @@ class PBRSaver:
                     pil_image = self.ensure_format_compatible(pil_image, file_format, map_type)
                     
                     # Save with appropriate settings
-                    if file_format == "png":
-                        # PNG supports alpha channel
-                        pil_image.save(filepath, format='PNG', compress_level=4)
+                    if file_format == "png" or file_format == "png16":
+                        # PNG supports alpha channel and 16-bit
+                        if file_format == "png16":
+                            pil_image.save(filepath, format='PNG', compress_level=4, bits=16)
+                            print(f"  ✓ Saved as 16-bit PNG")
+                        else:
+                            pil_image.save(filepath, format='PNG', compress_level=4)
                         if pil_image.mode == "RGBA":
                             print(f"  ✓ Saved with alpha channel")
                     elif file_format == "jpg":
@@ -739,6 +761,7 @@ class PBRSaver:
                         try:
                             import imageio
                             imageio.imwrite(filepath, img_np.astype(np.float32))
+                            print(f"  ✓ Saved as 32-bit float EXR")
                             if img_np.shape[-1] == 4:
                                 print(f"  ✓ Saved with alpha channel")
                         except ImportError:
