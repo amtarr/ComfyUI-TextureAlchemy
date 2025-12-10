@@ -1065,6 +1065,156 @@ class SharpenDepth:
         return (sharpened,)
 
 
+class NormalFormatAuto:
+    """
+    Automatically detect normal map format (DirectX or OpenGL) and convert to desired format
+    Detects current format, then converts only if needed
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "normal_map": ("IMAGE",),
+                "target_format": (["DirectX", "OpenGL"], {
+                    "default": "DirectX",
+                    "tooltip": "Desired output format"
+                }),
+                "detection_threshold": ("FLOAT", {
+                    "default": 0.05,
+                    "min": 0.01,
+                    "max": 0.2,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Detection sensitivity (lower = more strict)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("normal_map", "detected_format", "conversion_info")
+    FUNCTION = "auto_convert"
+    CATEGORY = "Texture Alchemist/Normal"
+    
+    def auto_convert(self, normal_map, target_format, detection_threshold):
+        """Detect format and convert to target if needed"""
+        
+        print("\n" + "="*60)
+        print("Normal Format Auto-Converter")
+        print("="*60)
+        print(f"Input shape: {normal_map.shape}")
+        print(f"Target format: {target_format}")
+        print(f"Detection threshold: {detection_threshold}")
+        
+        batch, height, width, channels = normal_map.shape
+        device = normal_map.device
+        dtype = normal_map.dtype
+        
+        # Validate input
+        if channels < 3:
+            print("⚠ Warning: Normal map has less than 3 channels")
+            return (normal_map, "UNKNOWN", "Error: Not RGB - no conversion possible")
+        
+        # Extract green channel for analysis
+        green = normal_map[:, :, :, 1]
+        
+        # Analyze green channel distribution
+        green_mean = green.mean().item()
+        above_half = (green > 0.5).float().mean().item()
+        below_half = (green < 0.5).float().mean().item()
+        
+        # Calculate bias (positive = OpenGL, negative = DirectX)
+        bias = above_half - below_half
+        
+        # Detect current format
+        if abs(bias) < detection_threshold:
+            detected_format = "AMBIGUOUS"
+            confidence = "Low"
+            print(f"\n⚠ DETECTION WARNING:")
+            print(f"  Unable to determine format with confidence")
+            print(f"  Bias: {bias:+.3f} (threshold: {detection_threshold})")
+            print(f"  Green mean: {green_mean:.3f}")
+            print(f"  Pixels > 0.5: {above_half*100:.1f}%")
+            print(f"  Pixels < 0.5: {below_half*100:.1f}%")
+            print(f"\n  Possible reasons:")
+            print(f"  • Normal map is mostly flat")
+            print(f"  • Equal distribution of up/down normals")
+            print(f"  • Lower detection threshold for stricter detection")
+        elif bias > 0:
+            detected_format = "OpenGL"
+            confidence_value = abs(bias) * 100
+            if confidence_value > 20:
+                confidence = "High"
+            elif confidence_value > 10:
+                confidence = "Medium"
+            else:
+                confidence = "Low"
+        else:
+            detected_format = "DirectX"
+            confidence_value = abs(bias) * 100
+            if confidence_value > 20:
+                confidence = "High"
+            elif confidence_value > 10:
+                confidence = "Medium"
+            else:
+                confidence = "Low"
+        
+        # Print detection results
+        print(f"\n📊 DETECTION RESULTS:")
+        print(f"  Detected Format: {detected_format}")
+        print(f"  Confidence: {confidence}")
+        print(f"  Bias: {bias:+.3f}")
+        print(f"  Green mean: {green_mean:.3f}")
+        
+        # Determine if conversion is needed
+        needs_conversion = False
+        conversion_info = ""
+        
+        if detected_format == "AMBIGUOUS":
+            # Can't reliably detect - apply user's choice anyway with warning
+            print(f"\n⚠ AMBIGUOUS DETECTION")
+            print(f"  Assuming input is opposite of target for safety")
+            print(f"  Will convert to {target_format}")
+            needs_conversion = True
+            conversion_info = f"AMBIGUOUS → {target_format} (forced conversion)"
+        elif detected_format == target_format:
+            # Already in correct format
+            print(f"\n✓ FORMAT MATCH")
+            print(f"  Input: {detected_format}")
+            print(f"  Target: {target_format}")
+            print(f"  → No conversion needed (pass-through)")
+            needs_conversion = False
+            conversion_info = f"{detected_format} → {target_format} (no change)"
+        else:
+            # Conversion needed
+            print(f"\n🔄 CONVERSION REQUIRED")
+            print(f"  Input: {detected_format}")
+            print(f"  Target: {target_format}")
+            print(f"  → Converting (inverting green channel)")
+            needs_conversion = True
+            conversion_info = f"{detected_format} → {target_format} (converted)"
+        
+        # Perform conversion if needed
+        if needs_conversion:
+            result = normal_map.clone()
+            result[:, :, :, 1] = 1.0 - result[:, :, :, 1]
+            
+            print(f"\n✓ CONVERSION COMPLETE")
+            print(f"  Green channel inverted")
+            print(f"  Output format: {target_format}")
+        else:
+            result = normal_map
+            print(f"\n✓ PASS-THROUGH")
+            print(f"  No changes made")
+        
+        print("="*60 + "\n")
+        
+        # Format detected string for output
+        detected_string = f"{detected_format} ({confidence} confidence)"
+        
+        return (result, detected_string, conversion_info)
+
+
 NODE_CLASS_MAPPINGS = {
     "NormalMapCombiner": NormalMapCombiner,
     "LotusNormalProcessor": LotusNormalProcessor,
@@ -1072,6 +1222,7 @@ NODE_CLASS_MAPPINGS = {
     "HeightToNormal": HeightToNormal,
     "NormalConverter": NormalConverter,
     "NormalFormatValidator": NormalFormatValidator,
+    "NormalFormatAuto": NormalFormatAuto,
     "NormalIntensity": NormalIntensity,
     "SharpenNormal": SharpenNormal,
     "SharpenDepth": SharpenDepth,
@@ -1084,6 +1235,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HeightToNormal": "Height to Normal Converter",
     "NormalConverter": "Normal Format Converter (DX↔GL)",
     "NormalFormatValidator": "Normal Format Validator (OGL vs DX)",
+    "NormalFormatAuto": "Normal Format Auto-Converter",
     "NormalIntensity": "Normal Intensity Adjuster",
     "SharpenNormal": "Sharpen Normal",
     "SharpenDepth": "Sharpen Depth",
