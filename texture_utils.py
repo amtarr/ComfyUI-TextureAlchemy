@@ -432,7 +432,14 @@ class TextureOffset:
         # Convert image to BHWC -> BCHW for PyTorch operations
         image_t = image.permute(0, 3, 1, 2)
         
-        # Step 1: Apply offset (roll/shift)
+        # Create edge mask BEFORE transformations (in original coordinate space)
+        edge_mask_original = self._create_original_edge_mask(
+            batch, height, width, edge_mask_width, device, dtype
+        )
+        # Convert to BCHW for transformation
+        edge_mask_t = edge_mask_original.permute(0, 3, 1, 2)
+        
+        # Step 1: Apply offset (roll/shift) to BOTH image and mask
         if offset_x != 0.0 or offset_y != 0.0:
             shift_x = int(width * offset_x)
             shift_y = int(height * offset_y)
@@ -440,6 +447,7 @@ class TextureOffset:
             # Use torch.roll for repeat mode (supports true circular wrapping)
             if wrap_mode == "repeat":
                 image_t = torch.roll(image_t, shifts=(shift_y, shift_x), dims=(2, 3))
+                edge_mask_t = torch.roll(edge_mask_t, shifts=(shift_y, shift_x), dims=(2, 3))
             else:
                 # For non-repeat modes, use affine transform with grid_sample
                 padding_mode = "border" if wrap_mode == "clamp" else "reflection"
@@ -452,8 +460,13 @@ class TextureOffset:
                 grid = F.affine_grid(theta, image_t.size(), align_corners=False)
                 image_t = F.grid_sample(image_t, grid, mode='bilinear', 
                                        padding_mode=padding_mode, align_corners=False)
+                
+                # Apply same transformation to mask
+                grid_mask = F.affine_grid(theta, edge_mask_t.size(), align_corners=False)
+                edge_mask_t = F.grid_sample(edge_mask_t, grid_mask, mode='bilinear', 
+                                           padding_mode=padding_mode, align_corners=False)
         
-        # Step 2: Apply rotation
+        # Step 2: Apply rotation to BOTH image and mask
         if rotation != 0.0:
             angle_rad = math.radians(rotation)
             cos_a = math.cos(angle_rad)
@@ -463,6 +476,7 @@ class TextureOffset:
             if wrap_mode == "repeat":
                 # Tile 3x3, rotate center, crop back
                 tiled = image_t.repeat(1, 1, 3, 3)
+                tiled_mask = edge_mask_t.repeat(1, 1, 3, 3)
                 
                 # Rotation matrix
                 theta = torch.tensor([
@@ -474,8 +488,14 @@ class TextureOffset:
                 rotated = F.grid_sample(tiled, grid, mode='bilinear', 
                                        padding_mode='zeros', align_corners=False)
                 
+                # Rotate mask too
+                grid_mask = F.affine_grid(theta, tiled_mask.size(), align_corners=False)
+                rotated_mask = F.grid_sample(tiled_mask, grid_mask, mode='bilinear', 
+                                            padding_mode='zeros', align_corners=False)
+                
                 # Crop center tile back to original size
                 image_t = rotated[:, :, height:height*2, width:width*2]
+                edge_mask_t = rotated_mask[:, :, height:height*2, width:width*2]
             else:
                 # For clamp/mirror modes, use grid_sample directly
                 padding_mode = "border" if wrap_mode == "clamp" else "reflection"
@@ -488,97 +508,60 @@ class TextureOffset:
                 grid = F.affine_grid(theta, image_t.size(), align_corners=False)
                 image_t = F.grid_sample(image_t, grid, mode='bilinear', 
                                        padding_mode=padding_mode, align_corners=False)
+                
+                # Apply same rotation to mask
+                grid_mask = F.affine_grid(theta, edge_mask_t.size(), align_corners=False)
+                edge_mask_t = F.grid_sample(edge_mask_t, grid_mask, mode='bilinear', 
+                                           padding_mode=padding_mode, align_corners=False)
         
         # Convert back to BCHW -> BHWC
         result = image_t.permute(0, 2, 3, 1)
-        
-        # Create edge mask showing affected areas
-        edge_mask = self._create_offset_edge_mask(
-            batch, height, width, offset_x, offset_y, rotation, 
-            edge_mask_width, device, dtype
-        )
+        edge_mask = edge_mask_t.permute(0, 2, 3, 1)
         
         print(f"✓ Texture offset applied")
         print(f"  Output shape: {result.shape}")
-        print(f"✓ Edge mask generated")
+        print(f"✓ Edge mask generated and transformed")
         print(f"  Mask range: [{edge_mask.min():.3f}, {edge_mask.max():.3f}]")
         print("="*60 + "\n")
         
         return (result, edge_mask)
     
-    def _create_offset_edge_mask(self, batch, height, width, offset_x, offset_y, 
-                                  rotation, edge_width, device, dtype):
-        """Create edge mask showing transformed/affected areas"""
-        import math
-        
+    def _create_original_edge_mask(self, batch, height, width, edge_width, device, dtype):
+        """Create edge mask in original coordinate space (before transformations)"""
         edge_mask = torch.zeros((batch, height, width, 1), device=device, dtype=dtype)
         
         # Calculate edge region size
         edge_h = max(1, int(height * edge_width))
         edge_w = max(1, int(width * edge_width))
         
-        # If there's offset, mark the shifted edges
-        if abs(offset_x) > 0.01 or abs(offset_y) > 0.01:
-            # Create gradient from edge to center
-            mask_h = torch.linspace(1, 0, edge_h, device=device, dtype=dtype)
-            mask_w = torch.linspace(1, 0, edge_w, device=device, dtype=dtype)
-            
-            # Mark edges based on offset direction
-            if offset_x != 0:
-                # Left or right edge (where new pixels wrap in)
-                shift_x = int(width * offset_x)
-                if shift_x > 0:
-                    # Shifted right, mark left edge
-                    edge_mask[:, :, :edge_w, :] = torch.max(
-                        edge_mask[:, :, :edge_w, :],
-                        mask_w.view(1, 1, -1, 1)
-                    )
-                else:
-                    # Shifted left, mark right edge
-                    edge_mask[:, :, -edge_w:, :] = torch.max(
-                        edge_mask[:, :, -edge_w:, :],
-                        torch.flip(mask_w, [0]).view(1, 1, -1, 1)
-                    )
-            
-            if offset_y != 0:
-                # Top or bottom edge
-                shift_y = int(height * offset_y)
-                if shift_y > 0:
-                    # Shifted down, mark top edge
-                    edge_mask[:, :edge_h, :, :] = torch.max(
-                        edge_mask[:, :edge_h, :, :],
-                        mask_h.view(1, -1, 1, 1)
-                    )
-                else:
-                    # Shifted up, mark bottom edge
-                    edge_mask[:, -edge_h:, :, :] = torch.max(
-                        edge_mask[:, -edge_h:, :, :],
-                        torch.flip(mask_h, [0]).view(1, -1, 1, 1)
-                    )
+        # Create gradient from edge to center
+        mask_h = torch.linspace(1, 0, edge_h, device=device, dtype=dtype)
+        mask_w = torch.linspace(1, 0, edge_w, device=device, dtype=dtype)
         
-        # If there's rotation, add diagonal/corner emphasis
-        if abs(rotation) > 1.0:
-            # Mark all edges (rotation affects entire perimeter)
-            mask_h = torch.linspace(1, 0, edge_h, device=device, dtype=dtype)
-            mask_w = torch.linspace(1, 0, edge_w, device=device, dtype=dtype)
-            
-            # All four edges
-            edge_mask[:, :edge_h, :, :] = torch.max(
-                edge_mask[:, :edge_h, :, :],
-                mask_h.view(1, -1, 1, 1)
-            )
-            edge_mask[:, -edge_h:, :, :] = torch.max(
-                edge_mask[:, -edge_h:, :, :],
-                torch.flip(mask_h, [0]).view(1, -1, 1, 1)
-            )
-            edge_mask[:, :, :edge_w, :] = torch.max(
-                edge_mask[:, :, :edge_w, :],
-                mask_w.view(1, 1, -1, 1)
-            )
-            edge_mask[:, :, -edge_w:, :] = torch.max(
-                edge_mask[:, :, -edge_w:, :],
-                torch.flip(mask_w, [0]).view(1, 1, -1, 1)
-            )
+        # Mark all four edges (they will be transformed along with the image)
+        # Top edge
+        edge_mask[:, :edge_h, :, :] = torch.max(
+            edge_mask[:, :edge_h, :, :],
+            mask_h.view(1, -1, 1, 1)
+        )
+        
+        # Bottom edge
+        edge_mask[:, -edge_h:, :, :] = torch.max(
+            edge_mask[:, -edge_h:, :, :],
+            torch.flip(mask_h, [0]).view(1, -1, 1, 1)
+        )
+        
+        # Left edge
+        edge_mask[:, :, :edge_w, :] = torch.max(
+            edge_mask[:, :, :edge_w, :],
+            mask_w.view(1, 1, -1, 1)
+        )
+        
+        # Right edge
+        edge_mask[:, :, -edge_w:, :] = torch.max(
+            edge_mask[:, :, -edge_w:, :],
+            torch.flip(mask_w, [0]).view(1, 1, -1, 1)
+        )
         
         # Convert to RGB for display
         edge_mask_rgb = edge_mask.repeat(1, 1, 1, 3)
