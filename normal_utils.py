@@ -1331,3 +1331,4 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NormalFormatAuto": "Normal Format Auto-Converter",
     "NormalIntensity": "Normal Intensity Adjuster",
     "SharpenNormal": "Sharpen Normal",
+}
