@@ -1257,6 +1257,133 @@ class TextureEqualizer:
         return rgb
 
 
+class UpscaleCalculator:
+    """
+    Calculate correct scale factors for multi-pass upscaling
+    Accounts for cumulative effect when chaining multiple upscalers
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "target_scale": ("FLOAT", {
+                    "default": 4.0,
+                    "min": 0.125,
+                    "max": 16.0,
+                    "step": 0.125,
+                    "display": "number",
+                    "tooltip": "Desired final scale multiplier (e.g., 4.0 for 512→2048)"
+                }),
+                "upscaler_multiplier": ("FLOAT", {
+                    "default": 4.0,
+                    "min": 1.0,
+                    "max": 8.0,
+                    "step": 0.5,
+                    "display": "number",
+                    "tooltip": "The multiplier of each upscaler (e.g., 4.0 for 4× upscaler)"
+                }),
+                "number_of_passes": ("INT", {
+                    "default": 2,
+                    "min": 1,
+                    "max": 10,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "How many upscalers will be chained"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "FLOAT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("image", "scale_per_pass", "target_width", "target_height", "info")
+    FUNCTION = "calculate_upscale"
+    CATEGORY = "Texture Alchemist/Texture"
+    
+    def calculate_upscale(self, image, target_scale, upscaler_multiplier, number_of_passes):
+        """Calculate scale factors for multi-pass upscaling"""
+        import math
+        
+        print("\n" + "="*60)
+        print("Upscale Calculator")
+        print("="*60)
+        
+        batch, height, width, channels = image.shape
+        
+        print(f"Input: {width}×{height}")
+        print(f"Target scale: {target_scale}×")
+        print(f"Upscaler multiplier: {upscaler_multiplier}×")
+        print(f"Number of passes: {number_of_passes}")
+        
+        # Calculate target dimensions
+        target_width = int(width * target_scale)
+        target_height = int(height * target_scale)
+        
+        print(f"\n📐 TARGET DIMENSIONS:")
+        print(f"  {width}×{height} → {target_width}×{target_height}")
+        print(f"  Scale: {target_scale}×")
+        
+        # Calculate the scale factor to apply after each upscaler pass
+        # Formula: scale_per_pass = (target_scale / upscaler^passes)^(1/passes)
+        # Simplified: scale_per_pass = target_scale^(1/passes) / upscaler
+        
+        if number_of_passes == 1:
+            # Simple case: only one pass
+            scale_per_pass = target_scale / upscaler_multiplier
+        else:
+            # Multi-pass: need to account for cumulative effect
+            # S^N * U^N = D, where S is scale per pass, U is upscaler, D is desired, N is passes
+            # S = (D / U^N)^(1/N) = D^(1/N) / U
+            scale_per_pass = math.pow(target_scale, 1.0 / number_of_passes) / upscaler_multiplier
+        
+        print(f"\n🔢 CALCULATION:")
+        print(f"  Formula: scale_per_pass = target_scale^(1/passes) / upscaler")
+        print(f"  scale_per_pass = {target_scale}^(1/{number_of_passes}) / {upscaler_multiplier}")
+        print(f"  scale_per_pass = {math.pow(target_scale, 1.0/number_of_passes):.4f} / {upscaler_multiplier}")
+        print(f"  scale_per_pass = {scale_per_pass:.6f}")
+        
+        # Verify the calculation
+        print(f"\n✓ VERIFICATION:")
+        current_size = width
+        for i in range(number_of_passes):
+            current_size = current_size * upscaler_multiplier * scale_per_pass
+            print(f"  After pass {i+1}: {current_size:.1f}×{current_size * height / width:.1f}")
+        
+        final_width = width * math.pow(upscaler_multiplier * scale_per_pass, number_of_passes)
+        final_height = height * math.pow(upscaler_multiplier * scale_per_pass, number_of_passes)
+        
+        print(f"\n  Expected final: {target_width}×{target_height}")
+        print(f"  Calculated final: {final_width:.1f}×{final_height:.1f}")
+        
+        accuracy = abs(final_width - target_width) / target_width * 100
+        if accuracy < 0.1:
+            print(f"  ✓ Perfect match!")
+        elif accuracy < 1:
+            print(f"  ✓ Very close (within 1%)")
+        else:
+            print(f"  ⚠ Deviation: {accuracy:.2f}%")
+        
+        # Create summary
+        info_lines = [
+            f"Input: {width}×{height}",
+            f"Target: {target_width}×{target_height} ({target_scale}×)",
+            f"Scale per pass: {scale_per_pass:.6f}",
+            f"Passes: {number_of_passes}",
+            f"Final: {final_width:.0f}×{final_height:.0f}"
+        ]
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n💡 USAGE:")
+        print(f"  Connect this image to your first upscaler")
+        print(f"  Set EACH upscaler's scale factor to: {scale_per_pass:.6f}")
+        print(f"  Chain {number_of_passes} upscalers together")
+        print(f"  Result: {target_width}×{target_height} ✓")
+        
+        print("="*60 + "\n")
+        
+        return (image, scale_per_pass, target_width, target_height, info_string)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "SeamlessTiling": SeamlessTiling,
@@ -1267,6 +1394,7 @@ NODE_CLASS_MAPPINGS = {
     "SmartTextureResizer": SmartTextureResizer,
     "SquareMaker": SquareMaker,
     "TextureEqualizer": TextureEqualizer,
+    "UpscaleCalculator": UpscaleCalculator,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1278,5 +1406,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SmartTextureResizer": "Smart Texture Resizer",
     "SquareMaker": "Square Maker",
     "TextureEqualizer": "Texture Equalizer",
+    "UpscaleCalculator": "Upscale Calculator (Multi-Pass)",
 }
 
