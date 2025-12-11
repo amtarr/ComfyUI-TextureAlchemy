@@ -1171,14 +1171,6 @@ class NormalFormatAuto:
                     "default": "DirectX",
                     "tooltip": "Desired output format"
                 }),
-                "detection_threshold": ("FLOAT", {
-                    "default": 0.05,
-                    "min": 0.01,
-                    "max": 0.2,
-                    "step": 0.01,
-                    "display": "number",
-                    "tooltip": "Detection sensitivity (lower = more strict)"
-                }),
             }
         }
     
@@ -1187,15 +1179,18 @@ class NormalFormatAuto:
     FUNCTION = "auto_convert"
     CATEGORY = "Texture Alchemist/Normal"
     
-    def auto_convert(self, normal_map, target_format, detection_threshold):
+    def auto_convert(self, normal_map, target_format):
         """Detect format and convert to target if needed"""
+        
+        # Use same threshold as validator for consistency
+        detection_threshold = 0.05
         
         print("\n" + "="*60)
         print("Normal Format Auto-Converter")
         print("="*60)
         print(f"Input shape: {normal_map.shape}")
         print(f"Target format: {target_format}")
-        print(f"Detection threshold: {detection_threshold}")
+        print(f"Detection threshold: {detection_threshold} (same as validator)")
         
         batch, height, width, channels = normal_map.shape
         device = normal_map.device
@@ -1232,7 +1227,7 @@ class NormalFormatAuto:
             print(f"\n  Possible reasons:")
             print(f"  • Normal map is mostly flat")
             print(f"  • Equal distribution of up/down normals")
-            print(f"  • Lower detection threshold for stricter detection")
+            print(f"  • Non-standard normal map")
         elif bias > 0:
             detected_format = "OpenGL"
             confidence_value = abs(bias) * 100
