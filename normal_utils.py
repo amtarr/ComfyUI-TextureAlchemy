@@ -1305,6 +1305,140 @@ class NormalFormatAuto:
         return (result, detected_string, conversion_info)
 
 
+class NormalFormatBruteForce:
+    """
+    Simple brute-force normal map format detector
+    Looks at overall color: More green = DirectX, More blue/purple = OpenGL
+    Automatically converts to your desired format
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "normal_map": ("IMAGE",),
+                "target_format": (["DirectX", "OpenGL"], {
+                    "default": "DirectX",
+                    "tooltip": "Desired output format"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "STRING", "STRING")
+    RETURN_NAMES = ("normal_map", "detected_format", "conversion_info")
+    FUNCTION = "brute_force_convert"
+    CATEGORY = "Texture Alchemist/Normal"
+    
+    def brute_force_convert(self, normal_map, target_format):
+        """Simple color-based detection and conversion"""
+        
+        print("\n" + "="*60)
+        print("Normal Format Brute Force Checker")
+        print("="*60)
+        print(f"Input shape: {normal_map.shape}")
+        print(f"Target format: {target_format}")
+        
+        batch, height, width, channels = normal_map.shape
+        
+        # Validate input
+        if channels < 3:
+            print("⚠ Warning: Normal map has less than 3 channels")
+            return (normal_map, "UNKNOWN", "Error: Not RGB - no conversion possible")
+        
+        # Extract channels
+        red = normal_map[:, :, :, 0]
+        green = normal_map[:, :, :, 1]
+        blue = normal_map[:, :, :, 2]
+        
+        # Calculate average intensity for each channel
+        red_mean = red.mean().item()
+        green_mean = green.mean().item()
+        blue_mean = blue.mean().item()
+        
+        print(f"\n📊 COLOR ANALYSIS:")
+        print(f"  Red mean:   {red_mean:.4f}")
+        print(f"  Green mean: {green_mean:.4f}")
+        print(f"  Blue mean:  {blue_mean:.4f}")
+        
+        # Calculate color dominance
+        green_dominance = green_mean - blue_mean
+        
+        print(f"\n🎨 COLOR DOMINANCE:")
+        print(f"  Green - Blue = {green_dominance:+.4f}")
+        
+        # Simple rule: If more green than blue → DirectX, else → OpenGL
+        if green_dominance > 0.02:
+            detected_format = "DirectX"
+            confidence = "High" if green_dominance > 0.05 else "Medium"
+            appearance = "Greenish/yellowish"
+            print(f"  → More GREEN than blue")
+            print(f"  → Appearance: {appearance}")
+        elif green_dominance < -0.02:
+            detected_format = "OpenGL"
+            confidence = "High" if abs(green_dominance) > 0.05 else "Medium"
+            appearance = "Bluish/purplish"
+            print(f"  → More BLUE than green")
+            print(f"  → Appearance: {appearance}")
+        else:
+            detected_format = "AMBIGUOUS"
+            confidence = "Low"
+            appearance = "Balanced"
+            print(f"  → Nearly equal green and blue")
+            print(f"  → Appearance: {appearance}")
+        
+        print(f"\n🎯 DETECTION RESULT:")
+        print(f"  Detected Format: {detected_format}")
+        print(f"  Confidence: {confidence}")
+        
+        # Determine if conversion is needed
+        needs_conversion = False
+        conversion_info = ""
+        
+        if detected_format == "AMBIGUOUS":
+            print(f"\n⚠ AMBIGUOUS DETECTION")
+            print(f"  Green and blue are too similar")
+            print(f"  Assuming opposite of target for safety")
+            needs_conversion = True
+            conversion_info = f"AMBIGUOUS → {target_format} (forced)"
+        elif detected_format == target_format:
+            print(f"\n✓ FORMAT MATCH")
+            print(f"  Input: {detected_format}")
+            print(f"  Target: {target_format}")
+            print(f"  → No conversion needed (pass-through)")
+            needs_conversion = False
+            conversion_info = f"{detected_format} → {target_format} (no change)"
+        else:
+            print(f"\n🔄 CONVERSION REQUIRED")
+            print(f"  Input: {detected_format}")
+            print(f"  Target: {target_format}")
+            print(f"  → Converting (inverting green channel)")
+            needs_conversion = True
+            conversion_info = f"{detected_format} → {target_format} (converted)"
+        
+        # Perform conversion if needed
+        if needs_conversion:
+            result = normal_map.clone()
+            result[:, :, :, 1] = 1.0 - result[:, :, :, 1]
+            
+            print(f"\n✓ CONVERSION COMPLETE")
+            print(f"  Green channel inverted")
+            print(f"  Output format: {target_format}")
+            
+            # Show color shift
+            new_green_mean = result[:, :, :, 1].mean().item()
+            print(f"  Green mean: {green_mean:.4f} → {new_green_mean:.4f}")
+        else:
+            result = normal_map
+            print(f"\n✓ PASS-THROUGH")
+            print(f"  No changes made")
+        
+        print("="*60 + "\n")
+        
+        detected_string = f"{detected_format} ({confidence} confidence)"
+        
+        return (result, detected_string, conversion_info)
+
+
 NODE_CLASS_MAPPINGS = {
     "NormalMapCombiner": NormalMapCombiner,
     "LotusNormalProcessor": LotusNormalProcessor,
@@ -1313,6 +1447,7 @@ NODE_CLASS_MAPPINGS = {
     "NormalConverter": NormalConverter,
     "NormalFormatValidator": NormalFormatValidator,
     "NormalFormatAuto": NormalFormatAuto,
+    "NormalFormatBruteForce": NormalFormatBruteForce,
     "NormalIntensity": NormalIntensity,
     "SharpenNormal": SharpenNormal,
     "SharpenDepth": SharpenDepth,
@@ -1326,6 +1461,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "NormalConverter": "Normal Format Converter (DX↔GL)",
     "NormalFormatValidator": "Normal Format Validator (OGL vs DX)",
     "NormalFormatAuto": "Normal Format Auto-Converter",
+    "NormalFormatBruteForce": "Normal Format Brute Force Checker",
     "NormalIntensity": "Normal Intensity Adjuster",
     "SharpenNormal": "Sharpen Normal",
     "SharpenDepth": "Sharpen Depth",
