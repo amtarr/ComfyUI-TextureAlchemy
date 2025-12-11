@@ -760,9 +760,9 @@ class NormalFormatValidator:
         below_half = (green < 0.5).float().mean().item()
         
         # Calculate histogram-based detection
-        # OpenGL (Y+): Green channel standard → typical normal maps appear BLUISH (more pixels < 0.5)
-        # DirectX (Y-): Green channel inverted → typical normal maps appear GREENISH (more pixels > 0.5)
-        # Blue/purple appearance = OpenGL | Green/yellow appearance = DirectX
+        # OpenGL (Y+): Bluish/purplish appearance → MORE GREEN PIXELS < 0.5 → bias < 0
+        # DirectX (Y-): Greenish/yellowish appearance → MORE GREEN PIXELS > 0.5 → bias > 0
+        # Visual rule: Blue/purple = OpenGL | Green/yellow = DirectX
         
         # Detect format based on bias
         bias = above_half - below_half
@@ -773,8 +773,8 @@ class NormalFormatValidator:
             confidence = "Low"
             reason = "Flat or equal distribution"
         elif bias > 0:
-            # More pixels above 0.5 = OpenGL (blue/purple appearance)
-            detected = "OpenGL"
+            # More pixels above 0.5 (brighter green) = DirectX (green/yellow appearance)
+            detected = "DirectX"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -784,8 +784,8 @@ class NormalFormatValidator:
                 confidence = "Low"
             reason = f"Green bias: +{bias:.2%}"
         else:
-            # More pixels below 0.5 = DirectX (green/yellow appearance)
-            detected = "DirectX"
+            # More pixels below 0.5 (darker green) = OpenGL (blue/purple appearance)
+            detected = "OpenGL"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -860,13 +860,13 @@ class NormalFormatValidator:
         )
         panel3 = threshold_vis
         
-        # Panel 4: Color-coded format indicator
-        if "OpenGL" in detected:
-            # Green = OpenGL (up-facing dominant)
-            color = torch.tensor([0.2, 1.0, 0.2], device=device, dtype=dtype)
-        elif "DirectX" in detected:
-            # Red = DirectX (down-facing dominant)
-            color = torch.tensor([1.0, 0.2, 0.2], device=device, dtype=dtype)
+        # Panel 4: Color-coded format indicator (matches actual appearance)
+        if "DirectX" in detected:
+            # Green = DirectX (greenish/yellow appearance)
+            color = torch.tensor([0.3, 1.0, 0.3], device=device, dtype=dtype)
+        elif "OpenGL" in detected:
+            # Blue = OpenGL (bluish/purple appearance)
+            color = torch.tensor([0.3, 0.3, 1.0], device=device, dtype=dtype)
         else:
             # Yellow = Ambiguous
             color = torch.tensor([1.0, 1.0, 0.2], device=device, dtype=dtype)
@@ -1210,8 +1210,8 @@ class NormalFormatAuto:
         below_half = (green < 0.5).float().mean().item()
         
         # Calculate bias to detect format
-        # OpenGL (Y+): Standard Y-axis → bluish appearance → more pixels > 0.5 → bias > 0
-        # DirectX (Y-): Inverted Y-axis → greenish appearance → more pixels < 0.5 → bias < 0
+        # OpenGL (Y+): Bluish/purplish appearance → MORE GREEN PIXELS < 0.5 → bias < 0
+        # DirectX (Y-): Greenish/yellowish appearance → MORE GREEN PIXELS > 0.5 → bias > 0
         bias = above_half - below_half
         
         # Detect current format
@@ -1229,7 +1229,7 @@ class NormalFormatAuto:
             print(f"  • Equal distribution of up/down normals")
             print(f"  • Non-standard normal map")
         elif bias > 0:
-            detected_format = "OpenGL"
+            detected_format = "DirectX"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -1238,7 +1238,7 @@ class NormalFormatAuto:
             else:
                 confidence = "Low"
         else:
-            detected_format = "DirectX"
+            detected_format = "OpenGL"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
