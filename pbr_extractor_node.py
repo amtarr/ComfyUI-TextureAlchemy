@@ -237,15 +237,223 @@ class PBRHeightProcessor:
         return (height,)
 
 
+class FrankenMapExtractor:
+    """
+    Extract PBR maps from FrankenMap format
+    FrankenMap channel layout:
+    - Red Channel: Grayscale/Albedo
+    - Green Channel: Height
+    - Blue Channel: Roughness
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "frankenmap": ("IMAGE",),
+                
+                # Gamma controls for each channel
+                "albedo_gamma": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Gamma correction for albedo (from red channel)"
+                }),
+                "height_gamma": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Gamma correction for height (from green channel)"
+                }),
+                "roughness_gamma": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Gamma correction for roughness (from blue channel)"
+                }),
+                
+                # Brightness/contrast controls
+                "albedo_brightness": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Albedo brightness multiplier"
+                }),
+                "height_contrast": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Height contrast multiplier"
+                }),
+                "roughness_brightness": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.0,
+                    "max": 3.0,
+                    "step": 0.01,
+                    "display": "slider",
+                    "tooltip": "Roughness brightness multiplier"
+                }),
+                
+                # Inversion controls
+                "invert_height": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert height values (bumps become indents)"
+                }),
+                "invert_roughness": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert roughness values (rough becomes smooth)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "IMAGE", "IMAGE", "PBR_PIPE")
+    RETURN_NAMES = ("albedo", "height", "roughness", "pbr_pipe")
+    FUNCTION = "extract"
+    CATEGORY = "Texture Alchemist/Extractors"
+    
+    def apply_gamma(self, image: torch.Tensor, gamma: float) -> torch.Tensor:
+        """Apply gamma correction"""
+        return torch.pow(torch.clamp(image, 0.0, 1.0), gamma)
+    
+    def adjust_brightness(self, image: torch.Tensor, brightness: float) -> torch.Tensor:
+        """Adjust image brightness"""
+        return torch.clamp(image * brightness, 0.0, 1.0)
+    
+    def adjust_contrast(self, image: torch.Tensor, contrast: float) -> torch.Tensor:
+        """Adjust image contrast around midpoint"""
+        midpoint = 0.5
+        return torch.clamp((image - midpoint) * contrast + midpoint, 0.0, 1.0)
+    
+    def channel_to_rgb(self, channel: torch.Tensor) -> torch.Tensor:
+        """Convert single channel to RGB"""
+        if channel.shape[-1] == 1:
+            return channel.repeat(1, 1, 1, 3)
+        return channel
+    
+    def extract(self, frankenmap, albedo_gamma, height_gamma, roughness_gamma,
+               albedo_brightness, height_contrast, roughness_brightness,
+               invert_height, invert_roughness):
+        """Extract PBR maps from FrankenMap"""
+        
+        print("\n" + "="*60)
+        print("FrankenMap PBR Extractor")
+        print("="*60)
+        print(f"Input shape: {frankenmap.shape}")
+        
+        # Validate input
+        if frankenmap.shape[-1] < 3:
+            print("⚠ Warning: FrankenMap should have 3 channels (RGB)")
+            print("  Padding with zeros for missing channels")
+            # Pad with zeros if needed
+            missing = 3 - frankenmap.shape[-1]
+            padding = torch.zeros(
+                (frankenmap.shape[0], frankenmap.shape[1], frankenmap.shape[2], missing),
+                device=frankenmap.device, dtype=frankenmap.dtype
+            )
+            frankenmap = torch.cat([frankenmap, padding], dim=-1)
+        
+        # Extract channels
+        # Red = Albedo/Grayscale
+        red_channel = frankenmap[:, :, :, 0:1]
+        # Green = Height
+        green_channel = frankenmap[:, :, :, 1:2]
+        # Blue = Roughness
+        blue_channel = frankenmap[:, :, :, 2:3]
+        
+        print(f"\n📊 CHANNEL EXTRACTION:")
+        print(f"  Red (Albedo): range [{red_channel.min():.3f}, {red_channel.max():.3f}]")
+        print(f"  Green (Height): range [{green_channel.min():.3f}, {green_channel.max():.3f}]")
+        print(f"  Blue (Roughness): range [{blue_channel.min():.3f}, {blue_channel.max():.3f}]")
+        
+        # Process Albedo (from red channel)
+        print(f"\n🎨 PROCESSING ALBEDO:")
+        print(f"  Gamma: {albedo_gamma}")
+        print(f"  Brightness: {albedo_brightness}")
+        
+        albedo = red_channel
+        albedo = self.apply_gamma(albedo, albedo_gamma)
+        albedo = self.adjust_brightness(albedo, albedo_brightness)
+        albedo = self.channel_to_rgb(albedo)
+        
+        print(f"  Output range: [{albedo.min():.3f}, {albedo.max():.3f}]")
+        
+        # Process Height (from green channel)
+        print(f"\n⛰️  PROCESSING HEIGHT:")
+        print(f"  Gamma: {height_gamma}")
+        print(f"  Contrast: {height_contrast}")
+        print(f"  Invert: {invert_height}")
+        
+        height = green_channel
+        height = self.apply_gamma(height, height_gamma)
+        height = self.adjust_contrast(height, height_contrast)
+        
+        if invert_height:
+            height = 1.0 - height
+            print(f"  ✓ Height inverted")
+        
+        height = self.channel_to_rgb(height)
+        
+        print(f"  Output range: [{height.min():.3f}, {height.max():.3f}]")
+        
+        # Process Roughness (from blue channel)
+        print(f"\n🔨 PROCESSING ROUGHNESS:")
+        print(f"  Gamma: {roughness_gamma}")
+        print(f"  Brightness: {roughness_brightness}")
+        print(f"  Invert: {invert_roughness}")
+        
+        roughness = blue_channel
+        roughness = self.apply_gamma(roughness, roughness_gamma)
+        roughness = self.adjust_brightness(roughness, roughness_brightness)
+        
+        if invert_roughness:
+            roughness = 1.0 - roughness
+            print(f"  ✓ Roughness inverted")
+        
+        roughness = self.channel_to_rgb(roughness)
+        
+        print(f"  Output range: [{roughness.min():.3f}, {roughness.max():.3f}]")
+        
+        # Create PBR pipe
+        pbr_pipe = {
+            "albedo": albedo,
+            "normal": None,
+            "ao": None,
+            "height": height,
+            "roughness": roughness,
+            "metallic": None,
+            "transparency": None,
+            "emission": None,
+        }
+        
+        print(f"\n✓ FrankenMap extraction complete")
+        print(f"  Extracted: Albedo, Height, Roughness")
+        print(f"  PBR Pipe created")
+        print("="*60 + "\n")
+        
+        return (albedo, height, roughness, pbr_pipe)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "PBRMaterialProcessor": PBRMaterialProcessor,
     "PBRNormalProcessor": PBRNormalProcessor,
     "PBRHeightProcessor": PBRHeightProcessor,
+    "FrankenMapExtractor": FrankenMapExtractor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "PBRMaterialProcessor": "PBR Material Processor (Marigold)",
     "PBRNormalProcessor": "PBR Normal Processor (Lotus)",
     "PBRHeightProcessor": "PBR Height Processor (Lotus)",
+    "FrankenMapExtractor": "PBR Extractor (FrankenMap)",
 }
