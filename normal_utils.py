@@ -672,8 +672,8 @@ class NormalFormatValidator:
         below_half = (green < 0.5).float().mean().item()
         
         # Calculate histogram-based detection
-        # OpenGL: Tends to have more pixels > 0.5 (Y points up)
-        # DirectX: Tends to have more pixels < 0.5 (Y points down, inverted)
+        # DirectX: Green inverted, upward normals have green < 0.5 (more dark green)
+        # OpenGL: Green standard, upward normals have green > 0.5 (more bright green)
         
         # Detect format based on bias
         bias = above_half - below_half
@@ -684,8 +684,8 @@ class NormalFormatValidator:
             confidence = "Low"
             reason = "Flat or equal distribution"
         elif bias > 0:
-            # More pixels above 0.5 = OpenGL
-            detected = "OpenGL"
+            # More pixels above 0.5 = DirectX (green looks brighter overall)
+            detected = "DirectX"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -695,8 +695,8 @@ class NormalFormatValidator:
                 confidence = "Low"
             reason = f"Green bias: +{bias:.2%}"
         else:
-            # More pixels below 0.5 = DirectX
-            detected = "DirectX"
+            # More pixels below 0.5 = OpenGL (green looks darker overall)
+            detected = "OpenGL"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -732,7 +732,7 @@ class NormalFormatValidator:
             print(f"  • Standard in most modern engines")
         elif detected == "DirectX":
             print(f"\n✓ DirectX Format")
-            print(f"  • Green channel points DOWN (-Y)")
+            print(f"  • Green channel points DOWN (-Y, inverted)")
             print(f"  • Compatible with: Unreal Engine, 3ds Max, Maya")
             print(f"  • 💡 Use 'Normal Format Converter' to flip to OpenGL")
         else:
@@ -1123,7 +1123,9 @@ class NormalFormatAuto:
         above_half = (green > 0.5).float().mean().item()
         below_half = (green < 0.5).float().mean().item()
         
-        # Calculate bias (positive = OpenGL, negative = DirectX)
+        # Calculate bias (positive = DirectX, negative = OpenGL based on corrected logic)
+        # DirectX: Inverted green, typical bumps appear brighter (> 0.5)
+        # OpenGL: Standard green, typical bumps appear darker (< 0.5)
         bias = above_half - below_half
         
         # Detect current format
@@ -1141,7 +1143,7 @@ class NormalFormatAuto:
             print(f"  • Equal distribution of up/down normals")
             print(f"  • Lower detection threshold for stricter detection")
         elif bias > 0:
-            detected_format = "OpenGL"
+            detected_format = "DirectX"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
@@ -1150,7 +1152,7 @@ class NormalFormatAuto:
             else:
                 confidence = "Low"
         else:
-            detected_format = "DirectX"
+            detected_format = "OpenGL"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
                 confidence = "High"
