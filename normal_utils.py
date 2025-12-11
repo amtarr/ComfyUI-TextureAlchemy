@@ -479,7 +479,8 @@ class NormalToDepth:
 
 class HeightToNormal:
     """
-    Convert height/depth maps to normal maps
+    Convert height/depth maps to normal maps with format selection
+    Supports Sobel, Scharr, and Prewitt operators with OpenGL/DirectX output
     """
     
     @classmethod
@@ -496,18 +497,30 @@ class HeightToNormal:
                     "tooltip": "Normal map strength/intensity"
                 }),
                 "method": (["sobel", "scharr", "prewitt"], {
-                    "default": "sobel",
-                    "tooltip": "Edge detection method"
+                    "default": "scharr",
+                    "tooltip": "Gradient operator: Scharr (best), Sobel (standard), Prewitt (simple)"
+                }),
+                "output_format": (["OpenGL", "DirectX"], {
+                    "default": "DirectX",
+                    "tooltip": "OpenGL: Y+ up (Unity, Blender) | DirectX: Y- up (Unreal, Maya)"
+                }),
+                "blur_radius": ("FLOAT", {
+                    "default": 0.0,
+                    "min": 0.0,
+                    "max": 5.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Pre-blur height map to reduce noise (0 = no blur)"
                 }),
             }
         }
     
-    RETURN_TYPES = ("IMAGE",)
-    RETURN_NAMES = ("normal",)
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("normal", "format_info")
     FUNCTION = "convert"
     CATEGORY = "Texture Alchemist/Normal"
     
-    def convert(self, height, strength, method):
+    def convert(self, height, strength, method, output_format, blur_radius):
         """Convert height map to normal map"""
         
         print("\n" + "="*60)
@@ -516,6 +529,8 @@ class HeightToNormal:
         print(f"Input shape: {height.shape}")
         print(f"Strength: {strength}")
         print(f"Method: {method}")
+        print(f"Output format: {output_format}")
+        print(f"Blur radius: {blur_radius}")
         
         # Convert to grayscale if needed
         if height.shape[-1] > 1:
@@ -527,22 +542,42 @@ class HeightToNormal:
         
         batch, h, w, channels = height_gray.shape
         
-        # Get gradient kernels
+        # Optional pre-blur to reduce noise
+        if blur_radius > 0.1:
+            height_gray = self._gaussian_blur(height_gray, blur_radius)
+            print(f"✓ Applied Gaussian blur (radius: {blur_radius})")
+        
+        # Get gradient kernels with proper normalization
         if method == "sobel":
+            # Sobel: Good balance, standard choice
             kernel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], 
-                                    device=height.device, dtype=height.dtype) / 8.0
+                                    device=height.device, dtype=height.dtype)
             kernel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], 
-                                    device=height.device, dtype=height.dtype) / 8.0
+                                    device=height.device, dtype=height.dtype)
+            kernel_scale = 1.0 / 8.0
+            print(f"  Using Sobel operator (standard, balanced)")
+            
         elif method == "scharr":
+            # Scharr: More accurate, better rotation invariance
             kernel_x = torch.tensor([[-3, 0, 3], [-10, 0, 10], [-3, 0, 3]], 
-                                    device=height.device, dtype=height.dtype) / 32.0
+                                    device=height.device, dtype=height.dtype)
             kernel_y = torch.tensor([[-3, -10, -3], [0, 0, 0], [3, 10, 3]], 
-                                    device=height.device, dtype=height.dtype) / 32.0
+                                    device=height.device, dtype=height.dtype)
+            kernel_scale = 1.0 / 16.0  # Better normalization for Scharr
+            print(f"  Using Scharr operator (most accurate, recommended)")
+            
         else:  # prewitt
+            # Prewitt: Simplest, more susceptible to noise
             kernel_x = torch.tensor([[-1, 0, 1], [-1, 0, 1], [-1, 0, 1]], 
-                                    device=height.device, dtype=height.dtype) / 6.0
+                                    device=height.device, dtype=height.dtype)
             kernel_y = torch.tensor([[-1, -1, -1], [0, 0, 0], [1, 1, 1]], 
-                                    device=height.device, dtype=height.dtype) / 6.0
+                                    device=height.device, dtype=height.dtype)
+            kernel_scale = 1.0 / 6.0
+            print(f"  Using Prewitt operator (simple, faster)")
+        
+        # Apply scale
+        kernel_x = kernel_x * kernel_scale
+        kernel_y = kernel_y * kernel_scale
         
         # Reshape for convolution
         kernel_x = kernel_x.view(1, 1, 3, 3)
@@ -555,9 +590,17 @@ class HeightToNormal:
         grad_y = torch.nn.functional.conv2d(height_bchw, kernel_y, padding=1)
         
         # Convert gradients to normal
-        # Normal = (-dz/dx, -dz/dy, 1)
+        # Normal = (-dz/dx, -dz/dy, 1) for OpenGL
+        # Normal = (-dz/dx, dz/dy, 1) for DirectX (invert Y)
         normal_x = -grad_x * strength
-        normal_y = -grad_y * strength
+        
+        if output_format == "OpenGL":
+            normal_y = -grad_y * strength
+            format_desc = "OpenGL (Y+)"
+        else:  # DirectX
+            normal_y = grad_y * strength  # Inverted Y for DirectX
+            format_desc = "DirectX (Y-)"
+        
         normal_z = torch.ones_like(normal_x)
         
         # Normalize
@@ -571,11 +614,56 @@ class HeightToNormal:
         # Back to BHWC
         normal = normal.permute(0, 2, 3, 1)
         
-        print(f"✓ Normal map generated")
+        # Analyze output
+        green_mean = normal[:, :, :, 1].mean().item()
+        
+        print(f"\n✓ Normal map generated")
         print(f"  Output shape: {normal.shape}")
+        print(f"  Format: {format_desc}")
+        print(f"  Green channel mean: {green_mean:.3f}")
+        if output_format == "DirectX":
+            print(f"  Compatible with: Unreal Engine, 3ds Max, Maya")
+        else:
+            print(f"  Compatible with: Unity, Blender, Three.js")
         print("="*60 + "\n")
         
-        return (normal,)
+        format_info = f"{format_desc} | Method: {method} | Strength: {strength}"
+        
+        return (normal, format_info)
+    
+    def _gaussian_blur(self, image, radius):
+        """Apply Gaussian blur to reduce noise"""
+        import math
+        
+        # Convert to BCHW for conv
+        image_bchw = image.permute(0, 3, 1, 2)
+        
+        # Create Gaussian kernel
+        kernel_size = int(radius * 4) + 1
+        if kernel_size % 2 == 0:
+            kernel_size += 1
+        kernel_size = max(3, min(kernel_size, 15))
+        
+        sigma = radius
+        kernel_range = torch.arange(kernel_size, dtype=image.dtype, device=image.device)
+        kernel_range = kernel_range - (kernel_size - 1) / 2.0
+        
+        kernel_1d = torch.exp(-0.5 * (kernel_range / sigma) ** 2)
+        kernel_1d = kernel_1d / kernel_1d.sum()
+        
+        # Separable convolution
+        kernel_h = kernel_1d.view(1, 1, kernel_size, 1)
+        kernel_w = kernel_1d.view(1, 1, 1, kernel_size)
+        
+        padding = kernel_size // 2
+        
+        # Apply horizontal blur
+        blurred = torch.nn.functional.conv2d(image_bchw, kernel_w, padding=(0, padding))
+        # Apply vertical blur
+        blurred = torch.nn.functional.conv2d(blurred, kernel_h, padding=(padding, 0))
+        
+        # Back to BHWC
+        return blurred.permute(0, 2, 3, 1)
 
 
 class NormalConverter:
