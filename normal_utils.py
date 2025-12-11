@@ -760,20 +760,21 @@ class NormalFormatValidator:
         below_half = (green < 0.5).float().mean().item()
         
         # Calculate histogram-based detection
-        # OpenGL (Y+): Bluish/purplish appearance → MORE GREEN PIXELS < 0.5 → bias < 0
-        # DirectX (Y-): Greenish/yellowish appearance → MORE GREEN PIXELS > 0.5 → bias > 0
-        # Visual rule: Blue/purple = OpenGL | Green/yellow = DirectX
+        # Based on empirical testing with actual user maps:
+        # Blue/purple maps (OpenGL) → Green pixels tend toward < 0.5 → bias < 0
+        # Green/yellow maps (DirectX) → Green pixels tend toward > 0.5 → bias > 0
+        # Visual rule: Blue/purple = OpenGL (Y+) | Green/yellow = DirectX (Y-)
         
         # Detect format based on bias
         bias = above_half - below_half
         
-        if abs(bias) < 0.05:
+        if abs(bias) < 0.03:
             # Very close to 0.5 distribution - ambiguous or flat
             detected = "AMBIGUOUS"
             confidence = "Low"
             reason = "Flat or equal distribution"
         elif bias > 0:
-            # More pixels above 0.5 (brighter green) = DirectX (green/yellow appearance)
+            # More pixels above 0.5 (brighter green channel) = DirectX
             detected = "DirectX"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
@@ -784,7 +785,7 @@ class NormalFormatValidator:
                 confidence = "Low"
             reason = f"Green bias: +{bias:.2%}"
         else:
-            # More pixels below 0.5 (darker green) = OpenGL (blue/purple appearance)
+            # More pixels below 0.5 (darker green channel) = OpenGL
             detected = "OpenGL"
             confidence_value = abs(bias) * 100
             if confidence_value > 20:
@@ -1183,14 +1184,14 @@ class NormalFormatAuto:
         """Detect format and convert to target if needed"""
         
         # Use same threshold as validator for consistency
-        detection_threshold = 0.05
+        detection_threshold = 0.03
         
         print("\n" + "="*60)
         print("Normal Format Auto-Converter")
         print("="*60)
         print(f"Input shape: {normal_map.shape}")
         print(f"Target format: {target_format}")
-        print(f"Detection threshold: {detection_threshold} (same as validator)")
+        print(f"Detection threshold: {detection_threshold} (matches validator)")
         
         batch, height, width, channels = normal_map.shape
         device = normal_map.device
@@ -1210,8 +1211,9 @@ class NormalFormatAuto:
         below_half = (green < 0.5).float().mean().item()
         
         # Calculate bias to detect format
-        # OpenGL (Y+): Bluish/purplish appearance → MORE GREEN PIXELS < 0.5 → bias < 0
-        # DirectX (Y-): Greenish/yellowish appearance → MORE GREEN PIXELS > 0.5 → bias > 0
+        # Based on empirical testing with actual user maps:
+        # Blue/purple maps (OpenGL) → Green pixels tend toward < 0.5 → bias < 0
+        # Green/yellow maps (DirectX) → Green pixels tend toward > 0.5 → bias > 0
         bias = above_half - below_half
         
         # Detect current format
