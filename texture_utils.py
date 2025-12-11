@@ -1384,6 +1384,186 @@ class UpscaleCalculator:
         return (image, scale_per_pass, target_width, target_height, info_string)
 
 
+class UpscaleToResolution:
+    """
+    Calculate correct scale factors for multi-pass upscaling to a target resolution
+    Specify exact output dimensions instead of scale multiplier
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "target_width": ("INT", {
+                    "default": 2048,
+                    "min": 64,
+                    "max": 16384,
+                    "step": 64,
+                    "display": "number",
+                    "tooltip": "Desired final width in pixels"
+                }),
+                "target_height": ("INT", {
+                    "default": 2048,
+                    "min": 64,
+                    "max": 16384,
+                    "step": 64,
+                    "display": "number",
+                    "tooltip": "Desired final height in pixels"
+                }),
+                "upscaler_multiplier": ("FLOAT", {
+                    "default": 4.0,
+                    "min": 1.0,
+                    "max": 8.0,
+                    "step": 0.5,
+                    "display": "number",
+                    "tooltip": "The multiplier of each upscaler (e.g., 4.0 for 4× upscaler)"
+                }),
+                "number_of_passes": ("INT", {
+                    "default": 2,
+                    "min": 1,
+                    "max": 10,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "How many upscalers will be chained"
+                }),
+                "maintain_aspect": ("BOOLEAN", {
+                    "default": True,
+                    "tooltip": "Maintain original aspect ratio (scale to fit within target dimensions)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "FLOAT", "INT", "INT", "FLOAT", "STRING")
+    RETURN_NAMES = ("image", "scale_per_pass", "final_width", "final_height", "total_scale", "info")
+    FUNCTION = "calculate_upscale"
+    CATEGORY = "Texture Alchemist/Texture"
+    
+    def calculate_upscale(self, image, target_width, target_height, upscaler_multiplier, 
+                         number_of_passes, maintain_aspect):
+        """Calculate scale factors for multi-pass upscaling to target resolution"""
+        import math
+        
+        print("\n" + "="*60)
+        print("Upscale to Resolution Calculator")
+        print("="*60)
+        
+        batch, height, width, channels = image.shape
+        
+        print(f"Input: {width}×{height}")
+        print(f"Target: {target_width}×{target_height}")
+        print(f"Upscaler multiplier: {upscaler_multiplier}×")
+        print(f"Number of passes: {number_of_passes}")
+        print(f"Maintain aspect: {maintain_aspect}")
+        
+        # Calculate required scale based on target dimensions
+        if maintain_aspect:
+            # Scale to fit within target dimensions (preserve aspect ratio)
+            scale_w = target_width / width
+            scale_h = target_height / height
+            
+            # Use the smaller scale to ensure it fits within target
+            target_scale = min(scale_w, scale_h)
+            
+            # Calculate actual final dimensions
+            final_width = int(width * target_scale)
+            final_height = int(height * target_scale)
+            
+            print(f"\n📐 ASPECT RATIO PRESERVED:")
+            print(f"  Scale width: {scale_w:.4f}×")
+            print(f"  Scale height: {scale_h:.4f}×")
+            print(f"  Using scale: {target_scale:.4f}× (smaller to fit within target)")
+            print(f"  Actual output: {final_width}×{final_height}")
+            
+            if final_width != target_width or final_height != target_height:
+                print(f"  ⚠ Note: Output will be smaller than target to preserve aspect ratio")
+        else:
+            # Non-uniform scaling (may distort image)
+            scale_w = target_width / width
+            scale_h = target_height / height
+            
+            if abs(scale_w - scale_h) > 0.01:
+                print(f"\n⚠ WARNING: Non-uniform scaling will distort the image!")
+                print(f"  Width scale: {scale_w:.4f}×")
+                print(f"  Height scale: {scale_h:.4f}×")
+                print(f"  Difference: {abs(scale_w - scale_h):.4f}×")
+            
+            # For simplicity, use average scale
+            target_scale = (scale_w + scale_h) / 2.0
+            final_width = target_width
+            final_height = target_height
+            
+            print(f"\n📐 NON-UNIFORM SCALING:")
+            print(f"  Using average scale: {target_scale:.4f}×")
+        
+        print(f"\n🎯 TARGET SCALE:")
+        print(f"  {width}×{height} → {final_width}×{final_height}")
+        print(f"  Scale factor: {target_scale:.4f}×")
+        
+        # Check if target is achievable
+        max_possible = width * math.pow(upscaler_multiplier, number_of_passes)
+        if final_width > max_possible:
+            print(f"\n⚠ WARNING: Target may not be achievable!")
+            print(f"  Maximum possible: {int(max_possible)}×{int(max_possible * height / width)}")
+            print(f"  You requested: {final_width}×{final_height}")
+            print(f"  Consider adding more passes or using a higher multiplier upscaler")
+        
+        # Calculate the scale factor to apply after each upscaler pass
+        if number_of_passes == 1:
+            scale_per_pass = target_scale / upscaler_multiplier
+        else:
+            scale_per_pass = math.pow(target_scale, 1.0 / number_of_passes) / upscaler_multiplier
+        
+        print(f"\n🔢 CALCULATION:")
+        print(f"  Formula: scale_per_pass = target_scale^(1/passes) / upscaler")
+        print(f"  scale_per_pass = {target_scale:.4f}^(1/{number_of_passes}) / {upscaler_multiplier}")
+        print(f"  scale_per_pass = {math.pow(target_scale, 1.0/number_of_passes):.6f} / {upscaler_multiplier}")
+        print(f"  scale_per_pass = {scale_per_pass:.6f}")
+        
+        # Verify the calculation
+        print(f"\n✓ VERIFICATION:")
+        current_w = width
+        current_h = height
+        for i in range(number_of_passes):
+            current_w = current_w * upscaler_multiplier * scale_per_pass
+            current_h = current_h * upscaler_multiplier * scale_per_pass
+            print(f"  After pass {i+1}: {current_w:.1f}×{current_h:.1f}")
+        
+        print(f"\n  Target: {final_width}×{final_height}")
+        print(f"  Result: {current_w:.1f}×{current_h:.1f}")
+        
+        accuracy_w = abs(current_w - final_width) / final_width * 100
+        accuracy_h = abs(current_h - final_height) / final_height * 100
+        max_accuracy = max(accuracy_w, accuracy_h)
+        
+        if max_accuracy < 0.1:
+            print(f"  ✓ Perfect match!")
+        elif max_accuracy < 1:
+            print(f"  ✓ Very close (within 1%)")
+        else:
+            print(f"  ⚠ Deviation: {max_accuracy:.2f}%")
+        
+        # Create summary
+        info_lines = [
+            f"Input: {width}×{height}",
+            f"Target: {final_width}×{final_height}",
+            f"Scale: {target_scale:.4f}×",
+            f"Scale per pass: {scale_per_pass:.6f}",
+            f"Passes: {number_of_passes}"
+        ]
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n💡 USAGE:")
+        print(f"  Connect this image to your first upscaler")
+        print(f"  Set EACH upscaler's scale factor to: {scale_per_pass:.6f}")
+        print(f"  Chain {number_of_passes} upscalers together")
+        print(f"  Result: {final_width}×{final_height} ✓")
+        
+        print("="*60 + "\n")
+        
+        return (image, scale_per_pass, final_width, final_height, target_scale, info_string)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "SeamlessTiling": SeamlessTiling,
@@ -1395,6 +1575,7 @@ NODE_CLASS_MAPPINGS = {
     "SquareMaker": SquareMaker,
     "TextureEqualizer": TextureEqualizer,
     "UpscaleCalculator": UpscaleCalculator,
+    "UpscaleToResolution": UpscaleToResolution,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1407,5 +1588,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "SquareMaker": "Square Maker",
     "TextureEqualizer": "Texture Equalizer",
     "UpscaleCalculator": "Upscale Calculator (Multi-Pass)",
+    "UpscaleToResolution": "Upscale to Resolution (Multi-Pass)",
 }
 
