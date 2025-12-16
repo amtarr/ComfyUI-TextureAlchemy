@@ -203,18 +203,25 @@ class PBRPipelineAdjuster:
         if saturation == 1.0:
             return image
         
+        # Ensure image is at least 3 channels
+        if image.shape[-1] < 3:
+            return image
+        
         # Convert to grayscale
         weights = torch.tensor([0.2989, 0.5870, 0.1140], 
                                device=image.device, dtype=image.dtype)
-        gray = torch.sum(image * weights, dim=-1, keepdim=True)
+        gray = torch.sum(image[..., :3] * weights, dim=-1, keepdim=True)
+        
+        # Expand gray to match image channels
+        gray_expanded = gray.repeat(1, 1, 1, image.shape[-1])
         
         # Blend between grayscale and original based on saturation
         if saturation < 1.0:
             # Desaturate
-            result = image * saturation + gray.repeat(1, 1, 1, 3) * (1.0 - saturation)
+            result = image * saturation + gray_expanded * (1.0 - saturation)
         else:
             # Oversaturate
-            result = image + (image - gray.repeat(1, 1, 1, 3)) * (saturation - 1.0)
+            result = image + (image - gray_expanded) * (saturation - 1.0)
         
         return torch.clamp(result, 0.0, 1.0)
     
@@ -223,8 +230,15 @@ class PBRPipelineAdjuster:
         if strength == 1.0:
             return normal
         
+        # Ensure normal has at least 3 channels
+        if normal.shape[-1] < 3:
+            return normal
+        
+        # Work only with the first 3 channels (RGB)
+        normal_rgb = normal[..., :3]
+        
         # Convert to [-1, 1] range
-        normal_unpacked = normal * 2.0 - 1.0
+        normal_unpacked = normal_rgb * 2.0 - 1.0
         
         # Blend between flat normal (0,0,1) and the actual normal
         flat = torch.tensor([0.0, 0.0, 1.0], device=normal.device, dtype=normal.dtype)
@@ -239,7 +253,13 @@ class PBRPipelineAdjuster:
         normal_unpacked = normal_unpacked / length
         
         # Convert back to [0, 1]
-        return normal_unpacked * 0.5 + 0.5
+        result = normal_unpacked * 0.5 + 0.5
+        
+        # If original had more than 3 channels, preserve them
+        if normal.shape[-1] > 3:
+            result = torch.cat([result, normal[..., 3:]], dim=-1)
+        
+        return result
     
     def adjust(self, pbr_pipe, ao_strength_albedo, ao_strength_roughness, roughness_strength, 
                metallic_strength, normal_strength, invert_normal_green, invert_transparency,
@@ -250,17 +270,35 @@ class PBRPipelineAdjuster:
         print("PBR Pipeline Adjuster")
         print("="*60)
         
+        # Validate input pipe
+        if not isinstance(pbr_pipe, dict):
+            print("✗ Error: pbr_pipe must be a dictionary")
+            return (pbr_pipe,)
+        
         # Extract maps from pipe
-        albedo = pbr_pipe["albedo"].clone() if pbr_pipe["albedo"] is not None else None
-        normal = pbr_pipe["normal"].clone() if pbr_pipe["normal"] is not None else None
-        ao = pbr_pipe["ao"].clone() if pbr_pipe["ao"] is not None else None
-        height = pbr_pipe["height"].clone() if pbr_pipe["height"] is not None else None
-        roughness = pbr_pipe["roughness"].clone() if pbr_pipe["roughness"] is not None else None
-        metallic = pbr_pipe["metallic"].clone() if pbr_pipe["metallic"] is not None else None
-        transparency = pbr_pipe["transparency"].clone() if pbr_pipe["transparency"] is not None else None
+        albedo = pbr_pipe.get("albedo", None)
+        albedo = albedo.clone() if albedo is not None else None
+        
+        normal = pbr_pipe.get("normal", None)
+        normal = normal.clone() if normal is not None else None
+        
+        ao = pbr_pipe.get("ao", None)
+        ao = ao.clone() if ao is not None else None
+        
+        height = pbr_pipe.get("height", None)
+        height = height.clone() if height is not None else None
+        
+        roughness = pbr_pipe.get("roughness", None)
+        roughness = roughness.clone() if roughness is not None else None
+        
+        metallic = pbr_pipe.get("metallic", None)
+        metallic = metallic.clone() if metallic is not None else None
+        
+        transparency = pbr_pipe.get("transparency", None)
+        transparency = transparency.clone() if transparency is not None else None
+        
         emission = pbr_pipe.get("emission", None)
-        if emission is not None:
-            emission = emission.clone()
+        emission = emission.clone() if emission is not None else None
         
         # ===== ALBEDO ADJUSTMENTS =====
         if albedo is not None:
@@ -406,6 +444,16 @@ class PBRPipelineAdjuster:
             "transparency": transparency,
             "emission": emission,
         }
+        
+        # Validate all tensors in output pipe
+        for map_name, tensor in output_pipe.items():
+            if tensor is not None:
+                if not isinstance(tensor, torch.Tensor):
+                    print(f"⚠ Warning: {map_name} is not a tensor: {type(tensor)}")
+                elif tensor.dim() != 4:
+                    print(f"⚠ Warning: {map_name} has incorrect dimensions: {tensor.shape} (expected 4D)")
+                elif tensor.shape[0] == 0 or tensor.shape[1] == 0 or tensor.shape[2] == 0:
+                    print(f"⚠ Warning: {map_name} has zero-size dimension: {tensor.shape}")
         
         print("\n" + "="*60)
         print("✓ Pipeline Adjustments Complete")
@@ -796,6 +844,14 @@ class PBRSaver:
         image_batch = []
         map_order = ["albedo", "normal", "ao", "height", "roughness", "metallic", "transparency", "emission"]
         
+        # Check if all images have the same dimensions
+        dimensions = []
+        for map_name in map_order:
+            if maps[map_name] is not None:
+                dimensions.append(maps[map_name].shape[1:3])
+        
+        all_same_dims = len(set(dimensions)) <= 1 if dimensions else True
+        
         for map_name in map_order:
             if maps[map_name] is not None:
                 img = maps[map_name]
@@ -836,11 +892,18 @@ class PBRSaver:
                     img_rgb = img[:, :, :, :3]
                     image_batch.append(img_rgb)
         
-        # If we have images, concatenate them into a batch
+        # If we have images, concatenate them into a batch (only if same dimensions)
         if image_batch:
-            # Concatenate along batch dimension
-            output_batch = torch.cat(image_batch, dim=0)
-            print(f"Output batch: {len(image_batch)} images, shape: {output_batch.shape}")
+            if all_same_dims:
+                # All same dimensions - safe to concatenate
+                output_batch = torch.cat(image_batch, dim=0)
+                print(f"Output batch: {len(image_batch)} images, shape: {output_batch.shape}")
+            else:
+                # Different dimensions - return first image only to avoid stretching
+                print(f"⚠ Maps have different dimensions - returning first map only to avoid distortion")
+                for name, dims in zip([m for m in map_order if maps[m] is not None], dimensions):
+                    print(f"  {name}: {dims}")
+                output_batch = image_batch[0]
         else:
             # Return placeholder if nothing was saved
             output_batch = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -883,6 +946,19 @@ class PBRPipePreview:
         # Collect all available images
         image_batch = []
         map_order = ["albedo", "normal", "ao", "height", "roughness", "metallic", "lighting", "transparency", "emission"]
+        
+        # Check if all images have the same dimensions
+        dimensions = []
+        for map_name in map_order:
+            if map_name in pbr_pipe and pbr_pipe[map_name] is not None:
+                img = pbr_pipe[map_name]
+                if isinstance(img, torch.Tensor):
+                    if img.dim() == 3:
+                        img = img.unsqueeze(0)
+                    dimensions.append((map_name, img.shape[1:3]))
+        
+        unique_dims = set([d[1] for d in dimensions])
+        all_same_dims = len(unique_dims) <= 1
         
         for map_name in map_order:
             if map_name in pbr_pipe and pbr_pipe[map_name] is not None:
@@ -938,12 +1014,20 @@ class PBRPipePreview:
                     image_batch.append(img_rgb)
                     print(f"✓ Added {map_name}: {img_rgb.shape} (trimmed from {original_channels} channels)")
         
-        # Concatenate all images into a batch
+        # Concatenate all images into a batch (only if same dimensions)
         if image_batch:
-            preview_batch = torch.cat(image_batch, dim=0)
-            print(f"\n✓ Preview batch created")
-            print(f"  Total images: {len(image_batch)}")
-            print(f"  Batch shape: {preview_batch.shape}")
+            if all_same_dims:
+                # All same dimensions - safe to concatenate
+                preview_batch = torch.cat(image_batch, dim=0)
+                print(f"\n✓ Preview batch created")
+                print(f"  Total images: {len(image_batch)}")
+                print(f"  Batch shape: {preview_batch.shape}")
+            else:
+                # Different dimensions - return first image only to avoid distortion
+                print(f"\n⚠ Maps have different dimensions - returning first map only to avoid distortion")
+                for name, dims in dimensions:
+                    print(f"  {name}: {dims}")
+                preview_batch = image_batch[0]
         else:
             print("⚠ No images found in pipe")
             preview_batch = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
@@ -1292,6 +1376,14 @@ class PBRSaverWithMetadata:
         image_batch = []
         map_order = ["albedo", "normal", "ao", "height", "roughness", "metallic", "transparency", "emission"]
         
+        # Check if all images have the same dimensions
+        dimensions = []
+        for map_name in map_order:
+            if maps[map_name] is not None:
+                dimensions.append(maps[map_name].shape[1:3])
+        
+        all_same_dims = len(set(dimensions)) <= 1 if dimensions else True
+        
         for map_name in map_order:
             if maps[map_name] is not None:
                 img = maps[map_name]
@@ -1331,14 +1423,22 @@ class PBRSaverWithMetadata:
                     img_rgb = img[:, :, :, :3]
                     image_batch.append(img_rgb)
         
-        # If we have images, concatenate them into a batch
+        # If we have images, concatenate them into a batch (only if same dimensions)
         if image_batch:
-            # Concatenate along batch dimension
-            output_batch = torch.cat(image_batch, dim=0)
-            print(f"Output batch: {len(image_batch)} images, shape: {output_batch.shape}")
+            if all_same_dims:
+                # All same dimensions - safe to concatenate
+                output_batch = torch.cat(image_batch, dim=0)
+                print(f"Output batch: {len(image_batch)} images, shape: {output_batch.shape}")
+            else:
+                # Different dimensions - return first image only to avoid distortion
+                print(f"⚠ Maps have different dimensions - returning first map only to avoid distortion")
+                for name, dims in zip([m for m in map_order if maps[m] is not None], dimensions):
+                    print(f"  {name}: {dims}")
+                output_batch = image_batch[0]
         else:
             # Return placeholder if nothing was saved
             output_batch = torch.zeros((1, 64, 64, 3), dtype=torch.float32)
+            print("No images to display")
         
         return (output_batch,)
 
