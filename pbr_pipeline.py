@@ -93,6 +93,15 @@ class PBRCombiner:
         available = [k for k, v in result_pipe.items() if v is not None]
         print(f"\nFinal pipe contains: {', '.join(available)}")
         
+        # Debug: Check if metallic is actually in there
+        if "metallic" in result_pipe:
+            if result_pipe["metallic"] is not None:
+                print(f"✓ Metallic confirmed in pipe: {result_pipe['metallic'].shape}")
+            else:
+                print("⚠ Metallic is None in pipe")
+        else:
+            print("✗ Metallic key missing from pipe!")
+        
         print("\n✓ PBR Pipeline created")
         print("="*60 + "\n")
         
@@ -138,6 +147,10 @@ class PBRPipelineAdjuster:
                     "display": "number",
                     "tooltip": "Brightness multiplier for roughness"
                 }),
+                "invert_roughness": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert roughness map (rough becomes smooth)"
+                }),
                 
                 # Metallic controls
                 "metallic_strength": ("FLOAT", {
@@ -147,6 +160,10 @@ class PBRPipelineAdjuster:
                     "step": 0.01,
                     "display": "number",
                     "tooltip": "Brightness multiplier for metallic"
+                }),
+                "invert_metallic": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert metallic map"
                 }),
                 
                 # Normal controls
@@ -262,8 +279,8 @@ class PBRPipelineAdjuster:
         return result
     
     def adjust(self, pbr_pipe, ao_strength_albedo, ao_strength_roughness, roughness_strength, 
-               metallic_strength, normal_strength, invert_normal_green, invert_transparency,
-               embed_transparency, albedo_dimmer, albedo_saturation):
+               invert_roughness, metallic_strength, invert_metallic, normal_strength, invert_normal_green, 
+               invert_transparency, embed_transparency, albedo_dimmer, albedo_saturation):
         """Apply adjustments to PBR pipeline"""
         
         print("\n" + "="*60)
@@ -341,6 +358,11 @@ class PBRPipelineAdjuster:
         
         # ===== ROUGHNESS ADJUSTMENTS =====
         if roughness is not None:
+            # Invert roughness
+            if invert_roughness:
+                roughness = 1.0 - roughness
+                print("✓ Roughness inverted")
+            
             # Apply strength (brightness)
             if roughness_strength != 1.0:
                 roughness = roughness * roughness_strength
@@ -376,11 +398,18 @@ class PBRPipelineAdjuster:
         
         # ===== METALLIC ADJUSTMENTS =====
         if metallic is not None:
+            # Invert metallic
+            if invert_metallic:
+                metallic = 1.0 - metallic
+                print("✓ Metallic inverted")
+            
+            # Apply strength
             if metallic_strength != 1.0:
                 metallic = metallic * metallic_strength
                 metallic = torch.clamp(metallic, 0.0, 1.0)
                 print(f"✓ Metallic strength: {metallic_strength}")
-                print(f"  Metallic range: [{metallic.min():.3f}, {metallic.max():.3f}]")
+            
+            print(f"  Metallic range: [{metallic.min():.3f}, {metallic.max():.3f}]")
         
         # ===== NORMAL ADJUSTMENTS =====
         if normal is not None:
@@ -487,6 +516,10 @@ class PBRSplitter:
         print("PBR Splitter")
         print("="*60)
         
+        # Debug: Show what keys are in the pipe
+        print(f"Pipe keys: {list(pbr_pipe.keys())}")
+        print(f"Pipe has metallic key: {'metallic' in pbr_pipe}")
+        
         albedo = pbr_pipe.get("albedo", None)
         normal = pbr_pipe.get("normal", None)
         ao = pbr_pipe.get("ao", None)
@@ -495,6 +528,12 @@ class PBRSplitter:
         metallic = pbr_pipe.get("metallic", None)
         transparency = pbr_pipe.get("transparency", None)
         emission = pbr_pipe.get("emission", None)
+        
+        # Debug metallic specifically
+        if metallic is not None:
+            print(f"✓ Metallic retrieved: {type(metallic)}, shape: {metallic.shape}")
+        else:
+            print(f"✗ Metallic is None! Value in pipe: {pbr_pipe.get('metallic', 'KEY NOT FOUND')}")
         
         # Create placeholder for None values (ComfyUI needs something)
         def create_placeholder():
