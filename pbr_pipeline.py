@@ -1864,4 +1864,3 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "PBRMaterialMixer": "PBR Material Mixer",
     "EmbedAlpha": "Embed Alpha",
 }
-
