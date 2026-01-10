@@ -424,16 +424,55 @@ class GammaAdjust:
         return (result,)
 
 
+class SimpleGammaAdjust:
+    """
+    Simple gamma correction with just one slider
+    Gamma < 1.0 brightens, Gamma > 1.0 darkens
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "gamma": ("FLOAT", {
+                    "default": 1.0,
+                    "min": 0.1,
+                    "max": 5.0,
+                    "step": 0.01,
+                    "tooltip": "Gamma value (< 1.0 = brighten, > 1.0 = darken, 1.0 = no change)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "adjust_gamma"
+    CATEGORY = "Texture Alchemist/Adjustment"
+    
+    def adjust_gamma(self, image, gamma):
+        """Apply gamma correction to image"""
+        # Clamp to valid range
+        image_clamped = torch.clamp(image, 0.0, 1.0)
+        
+        # Apply gamma
+        result = torch.pow(image_clamped, gamma)
+        
+        return (result,)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "LotusHeightProcessor": LotusHeightProcessor,
     "AOApproximator": AOApproximator,
     "GammaAdjust": GammaAdjust,
+    "SimpleGammaAdjust": SimpleGammaAdjust,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "LotusHeightProcessor": "Height Processor (Lotus)",
     "AOApproximator": "AO Approximator",
     "GammaAdjust": "Gamma Adjust",
+    "SimpleGammaAdjust": "Simple Gamma Adjust",
 }
 
