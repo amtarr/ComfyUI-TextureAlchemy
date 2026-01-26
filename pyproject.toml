@@ -1,0 +1,11 @@
+[project]
+name = "TextureAlchemy"
+version = "1.0.0"
+description = "Complete PBR & texture processing toolkit for ComfyUI"
+
+[project.urls]
+Repository = "https://github.com/amtarr/ComfyUI-TextureAlchemy"
+
+[tool.comfy]
+PublisherId = "amtarr"
+DisplayName = "Texture Alchemy"
