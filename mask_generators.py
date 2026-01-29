@@ -631,12 +631,218 @@ class ColorSelectionMask:
         return torch.stack([h, s, v], dim=3)
 
 
+class ImageMaskCombiner:
+    """
+    Combine image with mask from any source
+    Use with LoadImage (with mask painting) or MaskEditor nodes
+    Outputs both together for easy workflow routing
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("image", "mask", "mask_preview")
+    FUNCTION = "combine"
+    CATEGORY = "Texture Alchemist/Masks"
+    
+    def combine(self, image, mask):
+        """
+        Combine image and mask, creating mask visualization
+        """
+        
+        print("\n" + "="*60)
+        print("Image + Mask Combiner")
+        print("="*60)
+        print(f"Image shape: {image.shape}")
+        print(f"Mask shape: {mask.shape}")
+        
+        batch, height, width, channels = image.shape
+        
+        # Process mask
+        if mask is not None:
+            # Ensure mask matches image dimensions
+            if len(mask.shape) == 3:  # (B, H, W)
+                if mask.shape[1:3] != (height, width):
+                    print(f"  Resizing mask from {mask.shape[1:3]} to {(height, width)}")
+                    mask_reshaped = mask.unsqueeze(1)
+                    mask_resized = F.interpolate(
+                        mask_reshaped,
+                        size=(height, width),
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    mask = mask_resized.squeeze(1)
+            
+            # Ensure batch size matches
+            if mask.shape[0] != batch:
+                print(f"  Adjusting batch size from {mask.shape[0]} to {batch}")
+                if mask.shape[0] == 1:
+                    mask = mask.repeat(batch, 1, 1) if len(mask.shape) == 3 else mask.repeat(batch, 1, 1, 1)
+                else:
+                    mask = mask[:batch]
+            
+            # Ensure mask is 3D (B, H, W)
+            if len(mask.shape) == 4:
+                # Convert to grayscale if needed
+                if mask.shape[-1] > 1:
+                    weights = torch.tensor([0.299, 0.587, 0.114], device=mask.device, dtype=mask.dtype)
+                    mask = torch.sum(mask[..., :3] * weights, dim=-1)
+                else:
+                    mask = mask.squeeze(-1)
+        
+        # Create visualization of mask as RGB image
+        mask_preview = mask.unsqueeze(-1).repeat(1, 1, 1, 3)  # Convert to RGB
+        
+        # Print mask statistics
+        mask_min = mask.min().item()
+        mask_max = mask.max().item()
+        mask_mean = mask.mean().item()
+        nonzero_percent = (mask > 0.01).float().mean().item() * 100
+        
+        print(f"\n📊 Mask Statistics:")
+        print(f"  Range: [{mask_min:.3f}, {mask_max:.3f}]")
+        print(f"  Mean: {mask_mean:.3f}")
+        print(f"  Coverage: {nonzero_percent:.1f}% of image")
+        
+        print(f"\n✓ Outputs:")
+        print(f"  Image: {image.shape} (passthrough)")
+        print(f"  Mask: {mask.shape}")
+        print(f"  Mask Preview: {mask_preview.shape}")
+        print("="*60 + "\n")
+        
+        return (image, mask, mask_preview)
+
+
+class MaskCompositor:
+    """
+    Interactive mask compositor with canvas editor
+    Edit masks directly over images with painting tools
+    Click 'Open Mask Editor' button to paint, then 'Save to Node'
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            },
+            "hidden": {
+                "mask_data": "STRING",
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE")
+    RETURN_NAMES = ("image", "mask", "mask_preview")
+    FUNCTION = "composite"
+    CATEGORY = "Texture Alchemist/Masks"
+    
+    def composite(self, image, mask_data="", **kwargs):
+        """
+        Interactive mask editing over image with painted data from widget
+        """
+        
+        print("\n" + "="*60)
+        print("Mask Compositor")
+        print("="*60)
+        print(f"Image shape: {image.shape}")
+        
+        batch, height, width, channels = image.shape
+        device = image.device
+        dtype = image.dtype
+        
+        # Parse mask data from widget
+        mask = None
+        if mask_data and mask_data.strip():
+            try:
+                import json
+                import numpy as np
+                
+                print("📥 Parsing saved mask data...")
+                saved_data = json.loads(mask_data)
+                mask_width = saved_data['width']
+                mask_height = saved_data['height']
+                mask_array = np.array(saved_data['data'], dtype=np.uint8)
+                
+                # Reshape to (H, W, 4) RGBA
+                mask_rgba = mask_array.reshape((mask_height, mask_width, 4))
+                
+                # Convert to grayscale (use R channel since we painted in grayscale)
+                mask_gray = mask_rgba[:, :, 0].astype(np.float32) / 255.0
+                
+                # Convert to torch tensor
+                mask = torch.from_numpy(mask_gray).to(device=device, dtype=dtype)
+                
+                # Add batch dimension
+                mask = mask.unsqueeze(0)  # (1, H, W)
+                
+                print(f"✓ Loaded painted mask: {mask_width}×{mask_height}")
+                print(f"  Mask range: [{mask.min():.3f}, {mask.max():.3f}]")
+                
+                # Resize to match image dimensions if needed
+                if (mask_height, mask_width) != (height, width):
+                    print(f"  Resizing mask from {mask_width}×{mask_height} to {width}×{height}")
+                    mask = mask.unsqueeze(1)  # (1, 1, H, W)
+                    mask = F.interpolate(
+                        mask,
+                        size=(height, width),
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    mask = mask.squeeze(1)  # (1, H, W)
+                
+                # Match batch size
+                if batch > 1:
+                    mask = mask.repeat(batch, 1, 1)
+                
+            except Exception as e:
+                print(f"⚠️ Error parsing mask data: {e}")
+                print("  Creating empty mask instead")
+                mask = None
+        
+        # Create empty mask if no valid data
+        if mask is None:
+            print("⚠️ No painted mask - creating empty mask")
+            print("💡 Click 'Open Mask Editor' button to paint mask")
+            mask = torch.zeros((batch, height, width), device=device, dtype=dtype)
+        
+        # Create visualization
+        mask_preview = mask.unsqueeze(-1).repeat(1, 1, 1, 3)
+        
+        # Print statistics
+        mask_min = mask.min().item()
+        mask_max = mask.max().item()
+        mask_mean = mask.mean().item()
+        coverage = (mask > 0.01).float().mean().item() * 100
+        
+        print(f"\n📊 Mask Statistics:")
+        print(f"  Range: [{mask_min:.3f}, {mask_max:.3f}]")
+        print(f"  Mean: {mask_mean:.3f}")
+        print(f"  Coverage: {coverage:.1f}%")
+        
+        print(f"\n✓ Outputs:")
+        print(f"  Image: {image.shape}")
+        print(f"  Mask: {mask.shape}")
+        print(f"  Preview: {mask_preview.shape}")
+        print("="*60 + "\n")
+        
+        return (image, mask, mask_preview)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "EdgeWearMaskGenerator": EdgeWearMaskGenerator,
     "DirtGrimeMaskGenerator": DirtGrimeMaskGenerator,
     "GradientMaskGenerator": GradientMaskGenerator,
     "ColorSelectionMask": ColorSelectionMask,
+    "ImageMaskCombiner": ImageMaskCombiner,
+    "MaskCompositor": MaskCompositor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -644,5 +850,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DirtGrimeMaskGenerator": "Dirt/Grime Mask Generator",
     "GradientMaskGenerator": "Gradient Mask Generator",
     "ColorSelectionMask": "Color Selection Mask",
+    "ImageMaskCombiner": "Image + Mask Combiner",
+    "MaskCompositor": "Mask Compositor (Interactive)",
 }
 

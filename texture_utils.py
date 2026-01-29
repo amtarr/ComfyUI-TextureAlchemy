@@ -1564,6 +1564,1284 @@ class UpscaleToResolution:
         return (image, scale_per_pass, final_width, final_height, target_scale, info_string)
 
 
+class PaddingCalculator:
+    """
+    Calculate exact padding dimensions for percentage-based padding
+    Always rounds to whole numbers for perfect cropping
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "width": ("INT", {
+                    "default": 1024,
+                    "min": 1,
+                    "max": 16384,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Original image width in pixels"
+                }),
+                "height": ("INT", {
+                    "default": 1024,
+                    "min": 1,
+                    "max": 16384,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Original image height in pixels"
+                }),
+                "pad_percentage": ("FLOAT", {
+                    "default": 10.0,
+                    "min": 0.0,
+                    "max": 100.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Padding percentage (will be rounded to whole pixels)"
+                }),
+                "rounding_mode": (["round", "floor", "ceil"], {
+                    "default": "round",
+                    "tooltip": "How to round fractional pixels: round (nearest), floor (down), ceil (up)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("INT", "INT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("new_width", "new_height", "pad_pixels_width", "pad_pixels_height", "info")
+    FUNCTION = "calculate_padding"
+    CATEGORY = "Texture Alchemist/Texture"
+    
+    def calculate_padding(self, width, height, pad_percentage, rounding_mode):
+        """
+        Calculate padding that rounds to whole numbers for perfect cropping
+        Pads evenly on both sides
+        """
+        
+        print("\n" + "="*60)
+        print("Padding Calculator")
+        print("="*60)
+        print(f"Original dimensions: {width} × {height}")
+        print(f"Requested padding: {pad_percentage}%")
+        print(f"Rounding mode: {rounding_mode}")
+        
+        # Calculate raw padding per side
+        raw_pad_width = (width * pad_percentage) / 100.0
+        raw_pad_height = (height * pad_percentage) / 100.0
+        
+        print(f"\nRaw padding calculation:")
+        print(f"  Width: {raw_pad_width:.2f} pixels per side")
+        print(f"  Height: {raw_pad_height:.2f} pixels per side")
+        
+        # Round according to mode
+        import math
+        
+        if rounding_mode == "round":
+            pad_pixels_width = round(raw_pad_width)
+            pad_pixels_height = round(raw_pad_height)
+        elif rounding_mode == "floor":
+            pad_pixels_width = math.floor(raw_pad_width)
+            pad_pixels_height = math.floor(raw_pad_height)
+        else:  # ceil
+            pad_pixels_width = math.ceil(raw_pad_width)
+            pad_pixels_height = math.ceil(raw_pad_height)
+        
+        # Calculate new dimensions (original + padding on both sides)
+        new_width = width + (pad_pixels_width * 2)
+        new_height = height + (pad_pixels_height * 2)
+        
+        # Calculate actual percentage applied
+        actual_percent_width = (pad_pixels_width / width) * 100.0 if width > 0 else 0
+        actual_percent_height = (pad_pixels_height / height) * 100.0 if height > 0 else 0
+        
+        print(f"\n✓ Rounded padding:")
+        print(f"  Width: {pad_pixels_width} pixels per side")
+        print(f"  Height: {pad_pixels_height} pixels per side")
+        print(f"\n✓ New dimensions:")
+        print(f"  {width} × {height} → {new_width} × {new_height}")
+        print(f"\n✓ Actual padding percentage:")
+        print(f"  Width: {actual_percent_width:.2f}%")
+        print(f"  Height: {actual_percent_height:.2f}%")
+        
+        # Create info string
+        info_lines = [
+            f"Original: {width} × {height}",
+            f"Requested: {pad_percentage}% padding",
+            f"Rounded: {pad_pixels_width}px (W), {pad_pixels_height}px (H) per side",
+            f"New size: {new_width} × {new_height}",
+            f"Actual: {actual_percent_width:.2f}% (W), {actual_percent_height:.2f}% (H)"
+        ]
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n💡 Usage:")
+        print(f"  1. Pad image by {pad_pixels_width}px (W) and {pad_pixels_height}px (H)")
+        print(f"  2. Process the {new_width} × {new_height} image")
+        print(f"  3. Crop back using the same padding values")
+        print("="*60 + "\n")
+        
+        return (new_width, new_height, pad_pixels_width, pad_pixels_height, info_string)
+
+
+class InpaintCropExtractor:
+    """
+    Extract masked region as a cropped image for processing
+    Finds bounding box of mask and crops image + mask to that region
+    Perfect for efficient inpainting workflows
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "padding": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Extra padding around mask bounding box (pixels)"
+                }),
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert the mask before processing (e.g., for white background masks)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "IMAGE", "MASK", "INT", "INT", "INT", "INT", "STRING", "BBOX_DATA")
+    RETURN_NAMES = ("cropped_image", "masked_crop", "cropped_mask", "bbox_x", "bbox_y", "bbox_width", "bbox_height", "info", "bbox_data")
+    FUNCTION = "extract_crop"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def extract_crop(self, image, mask, padding, invert_mask):
+        """
+        Find mask bounding box and extract cropped region
+        """
+        
+        print("\n" + "="*60)
+        print("Inpaint Crop Extractor")
+        print("="*60)
+        print(f"Image shape: {image.shape}")
+        print(f"Mask shape: {mask.shape}")
+        print(f"Padding: {padding}px")
+        print(f"Invert mask: {invert_mask}")
+        
+        batch, height, width, channels = image.shape
+        
+        # Ensure mask matches image dimensions
+        if len(mask.shape) == 3:  # (B, H, W)
+            mask_2d = mask[0]  # Take first in batch
+        else:  # (B, H, W, C)
+            mask_2d = mask[0, :, :, 0]
+        
+        # Resize mask if needed
+        if mask_2d.shape != (height, width):
+            mask_reshaped = mask.unsqueeze(1) if len(mask.shape) == 3 else mask.permute(0, 3, 1, 2)
+            mask_resized = F.interpolate(
+                mask_reshaped,
+                size=(height, width),
+                mode='bilinear',
+                align_corners=False
+            )
+            if len(mask.shape) == 3:
+                mask = mask_resized.squeeze(1)
+                mask_2d = mask[0]
+            else:
+                mask = mask_resized.permute(0, 2, 3, 1)
+                mask_2d = mask[0, :, :, 0]
+        
+        # Apply inversion if requested
+        if invert_mask:
+            mask_2d = 1.0 - mask_2d
+            print("✓ Mask inverted for processing.")
+        
+        # Debugging mask analysis
+        print("\n🔍 Analyzing mask:")
+        print(f"  Mask shape: {mask_2d.shape}")
+        print(f"  Mask range: [{mask_2d.min():.3f}, {mask_2d.max():.3f}]")
+        print(f"  Pixels > 0.01: {(mask_2d > 0.01).sum().item()}")
+        print(f"  Pixels > 0.1: {(mask_2d > 0.1).sum().item()}")
+        print(f"  Pixels > 0.5: {(mask_2d > 0.5).sum().item()}")
+        print(f"  Pixels > 0.9: {(mask_2d > 0.9).sum().item()}")
+        
+        # Debugging edge analysis
+        print("\n🔍 Edge analysis:")
+        if mask_2d.shape[0] > 0 and mask_2d.shape[1] > 0:
+            print(f"  Top-left corner (0,0): {mask_2d[0, 0].item():.3f}")
+            print(f"  Top-right corner (0,-1): {mask_2d[0, -1].item():.3f}")
+            print(f"  Bottom-left corner (-1,0): {mask_2d[-1, 0].item():.3f}")
+            print(f"  Bottom-right corner (-1,-1): {mask_2d[-1, -1].item():.3f}")
+            print(f"  Top row max: {mask_2d[0, :].max().item():.3f}")
+            print(f"  Bottom row max: {mask_2d[-1, :].max().item():.3f}")
+            print(f"  Left column max: {mask_2d[:, 0].max().item():.3f}")
+            print(f"  Right column max: {mask_2d[:, -1].max().item():.3f}")
+        
+        # Find bounding box of mask (where mask > 0.01)
+        mask_binary = (mask_2d > 0.01).float()
+        
+        # Find non-zero coordinates
+        nonzero = torch.nonzero(mask_binary, as_tuple=False)
+        
+        print(f"  Non-zero count: {nonzero.shape[0]}")
+        
+        if nonzero.shape[0] == 0:
+            # Empty mask - return full image
+            print("\n⚠️ Empty mask detected (after thresholding) - returning full image")
+            bbox_x, bbox_y = 0, 0
+            bbox_width, bbox_height = width, height
+        else:
+            # Get bounding box
+            y_min = nonzero[:, 0].min().item()
+            y_max = nonzero[:, 0].max().item()
+            x_min = nonzero[:, 1].min().item()
+            x_max = nonzero[:, 1].max().item()
+            
+            # Add padding (expand bounding box within original image bounds)
+            y_min = max(0, y_min - padding)
+            y_max = min(height - 1, y_max + padding)
+            x_min = max(0, x_min - padding)
+            x_max = min(width - 1, x_max + padding)
+            
+            bbox_x = x_min
+            bbox_y = y_min
+            bbox_width = x_max - x_min + 1
+            bbox_height = y_max - y_min + 1
+            
+            print(f"\n✓ Bounding box found:")
+            print(f"  Position: ({bbox_x}, {bbox_y})")
+            print(f"  Size: {bbox_width} × {bbox_height}")
+            print(f"  Original canvas: {width} × {height}")
+            print(f"  Coverage: {(bbox_width * bbox_height) / (width * height) * 100:.1f}% of image")
+        
+        print("\n✂️ Cropping:")
+        
+        # Crop image
+        cropped_image = image[:, bbox_y:bbox_y+bbox_height, bbox_x:bbox_x+bbox_width, :]
+        
+        # Crop mask (use the processed mask_2d, then reconstruct full mask if needed)
+        # If we inverted, we need to work with inverted data
+        cropped_mask_2d = mask_2d[bbox_y:bbox_y+bbox_height, bbox_x:bbox_x+bbox_width]
+        
+        # Expand to batch if needed
+        if batch > 1:
+            cropped_mask = cropped_mask_2d.unsqueeze(0).repeat(batch, 1, 1)
+        else:
+            cropped_mask = cropped_mask_2d.unsqueeze(0)
+        
+        print(f"  Cropped image: {cropped_image.shape}")
+        print(f"  Cropped mask: {cropped_mask.shape}")
+        print(f"  Expected: {batch, bbox_height, bbox_width}")
+        
+        # Create masked crop (image with mask applied)
+        # Expand mask to match image channels
+        mask_expanded = cropped_mask.unsqueeze(-1).repeat(1, 1, 1, channels)
+        masked_crop = cropped_image * mask_expanded
+        
+        # Create info string
+        info_lines = [
+            f"BBox: ({bbox_x}, {bbox_y})",
+            f"Size: {bbox_width}×{bbox_height}",
+            f"Original: {width}×{height}",
+            f"Padding: {padding}px"
+        ]
+        if invert_mask:
+            info_lines.append("Mask inverted")
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n✓ Outputs:")
+        print(f"  Cropped Image: {cropped_image.shape}")
+        print(f"  Masked Crop: {masked_crop.shape}")
+        print(f"  Cropped Mask: {cropped_mask.shape}")
+        print(f"  BBox: x={bbox_x}, y={bbox_y}, w={bbox_width}, h={bbox_height}")
+        
+        # Print mask statistics
+        mask_min = cropped_mask.min().item()
+        mask_max = cropped_mask.max().item()
+        mask_mean = cropped_mask.mean().item()
+        coverage = (cropped_mask > 0.01).float().mean().item() * 100
+        
+        print(f"\n📊 Cropped Mask Statistics:")
+        print(f"  Range: [{mask_min:.3f}, {mask_max:.3f}]")
+        print(f"  Mean: {mask_mean:.3f}")
+        print(f"  Coverage: {coverage:.1f}% of crop")
+        print("="*60 + "\n")
+        
+        # Create bbox data bundle for simplified workflow
+        bbox_data = {
+            "x": bbox_x,
+            "y": bbox_y,
+            "width": bbox_width,
+            "height": bbox_height,
+            "original_width": width,
+            "original_height": height
+        }
+        
+        return (cropped_image, masked_crop, cropped_mask, bbox_x, bbox_y, bbox_width, bbox_height, info_string, bbox_data)
+
+
+class InpaintStitcher:
+    """
+    Stitch processed crop back onto original image
+    Uses bounding box coordinates from InpaintCropExtractor
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_image": ("IMAGE",),
+                "processed_crop": ("IMAGE",),
+                "bbox_x": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 16384,
+                    "display": "number"
+                }),
+                "bbox_y": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 16384,
+                    "display": "number"
+                }),
+                "bbox_width": ("INT", {
+                    "default": 512,
+                    "min": 1,
+                    "max": 16384,
+                    "display": "number"
+                }),
+                "bbox_height": ("INT", {
+                    "default": 512,
+                    "min": 1,
+                    "max": 16384,
+                    "display": "number"
+                }),
+                "blend_mode": (["replace", "blend"], {
+                    "default": "replace",
+                    "tooltip": "Replace: hard composite, Blend: soft edges"
+                }),
+                "feather": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 100,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Feather/blend edges (pixels, only for blend mode)"
+                }),
+            },
+            "optional": {
+                "blend_mask": ("MASK",),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("stitched_image",)
+    FUNCTION = "stitch"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def stitch(self, original_image, processed_crop, bbox_x, bbox_y, bbox_width, bbox_height, 
+               blend_mode, feather, blend_mask=None):
+        """
+        Composite processed crop back onto original image
+        """
+        
+        print("\n" + "="*60)
+        print("Inpaint Stitcher")
+        print("="*60)
+        print(f"Original image: {original_image.shape}")
+        print(f"Processed crop: {processed_crop.shape}")
+        print(f"BBox: ({bbox_x}, {bbox_y}) size {bbox_width}×{bbox_height}")
+        print(f"Blend mode: {blend_mode}")
+        
+        batch, height, width, channels = original_image.shape
+        
+        # Create result as copy of original
+        result = original_image.clone()
+        
+        # Resize processed crop if it doesn't match bbox dimensions
+        crop_batch, crop_h, crop_w, crop_c = processed_crop.shape
+        if (crop_h, crop_w) != (bbox_height, bbox_width):
+            print(f"  Resizing crop from {crop_w}×{crop_h} to {bbox_width}×{bbox_height}")
+            processed_crop = F.interpolate(
+                processed_crop.permute(0, 3, 1, 2),
+                size=(bbox_height, bbox_width),
+                mode='bilinear',
+                align_corners=False
+            ).permute(0, 2, 3, 1)
+        
+        # Clamp bbox to image boundaries
+        x_end = min(bbox_x + bbox_width, width)
+        y_end = min(bbox_y + bbox_height, height)
+        actual_width = x_end - bbox_x
+        actual_height = y_end - bbox_y
+        
+        if (actual_width, actual_height) != (bbox_width, bbox_height):
+            print(f"  Clamping to image boundaries: {actual_width}×{actual_height}")
+            processed_crop = processed_crop[:, :actual_height, :actual_width, :]
+        
+        if blend_mode == "replace":
+            # Hard composite - direct replacement
+            result[:, bbox_y:y_end, bbox_x:x_end, :] = processed_crop
+            print(f"✓ Hard composite applied")
+            
+        else:  # blend
+            # Create blend mask
+            if blend_mask is not None:
+                # Use provided mask
+                print(f"  Using provided blend mask")
+                if len(blend_mask.shape) == 3:  # (B, H, W)
+                    mask_2d = blend_mask[0]
+                else:  # (B, H, W, C)
+                    mask_2d = blend_mask[0, :, :, 0]
+                
+                # Resize to crop size
+                if mask_2d.shape != (actual_height, actual_width):
+                    mask_reshaped = blend_mask.unsqueeze(1) if len(blend_mask.shape) == 3 else blend_mask.permute(0, 3, 1, 2)
+                    mask_resized = F.interpolate(
+                        mask_reshaped,
+                        size=(actual_height, actual_width),
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    if len(blend_mask.shape) == 3:
+                        blend_alpha = mask_resized[0, 0]
+                    else:
+                        blend_alpha = mask_resized[0, 0, :, :]
+                else:
+                    blend_alpha = mask_2d[:actual_height, :actual_width]
+            elif feather > 0:
+                # Create feathered edge mask
+                blend_alpha = torch.ones((actual_height, actual_width), 
+                                        device=original_image.device, 
+                                        dtype=original_image.dtype)
+                
+                # Apply feather to edges
+                feather_pixels = min(feather, actual_width // 2, actual_height // 2)
+                if feather_pixels > 0:
+                    for i in range(feather_pixels):
+                        alpha_value = i / feather_pixels
+                        # Top
+                        blend_alpha[i, :] = alpha_value
+                        # Bottom
+                        blend_alpha[actual_height - 1 - i, :] = alpha_value
+                        # Left
+                        blend_alpha[:, i] = torch.minimum(blend_alpha[:, i], 
+                                                         torch.tensor(alpha_value, device=blend_alpha.device))
+                        # Right
+                        blend_alpha[:, actual_width - 1 - i] = torch.minimum(
+                            blend_alpha[:, actual_width - 1 - i],
+                            torch.tensor(alpha_value, device=blend_alpha.device))
+                
+                print(f"  Applied {feather_pixels}px feather")
+            else:
+                # No feather, just alpha blend
+                blend_alpha = torch.ones((actual_height, actual_width),
+                                        device=original_image.device,
+                                        dtype=original_image.dtype)
+            
+            # Expand alpha to match channels
+            blend_alpha = blend_alpha.unsqueeze(0).unsqueeze(-1).repeat(batch, 1, 1, channels)
+            
+            # Alpha blend
+            original_region = result[:, bbox_y:y_end, bbox_x:x_end, :]
+            result[:, bbox_y:y_end, bbox_x:x_end, :] = (
+                processed_crop * blend_alpha + original_region * (1.0 - blend_alpha)
+            )
+            print(f"✓ Soft blend applied")
+        
+        print(f"\n✓ Stitched result: {result.shape}")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
+class SimpleInpaintCrop:
+    """
+    SIMPLIFIED INPAINTING - CROP
+    One-click crop with bundled bbox data for easy stitching
+    Perfect for streamlined inpainting workflows
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "padding": ("INT", {
+                    "default": 32,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Extra padding around mask (pixels)"
+                }),
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert mask before processing"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "MASK", "IMAGE", "BBOX_DATA", "STRING")
+    RETURN_NAMES = ("cropped_image", "cropped_mask", "masked_composite", "bbox_data", "info")
+    FUNCTION = "crop_for_inpaint"
+    CATEGORY = "Texture Alchemist/Inpainting/Simple"
+    
+    def crop_for_inpaint(self, image, mask, padding, invert_mask):
+        """
+        Extract masked region for inpainting with bundled bbox data
+        """
+        
+        print("\n" + "="*60)
+        print("Simple Inpaint Crop")
+        print("="*60)
+        print(f"Image: {image.shape}")
+        print(f"Mask: {mask.shape}")
+        print(f"Padding: {padding}px")
+        
+        batch, height, width, channels = image.shape
+        device = image.device
+        dtype = image.dtype
+        
+        # Ensure mask matches image dimensions
+        if len(mask.shape) == 3:  # (B, H, W)
+            mask_2d = mask[0]
+        else:  # (B, H, W, C)
+            mask_2d = mask[0, :, :, 0]
+        
+        # Resize mask if needed
+        if mask_2d.shape != (height, width):
+            mask_reshaped = mask.unsqueeze(1) if len(mask.shape) == 3 else mask.permute(0, 3, 1, 2)
+            mask_resized = F.interpolate(
+                mask_reshaped,
+                size=(height, width),
+                mode='bilinear',
+                align_corners=False
+            )
+            if len(mask.shape) == 3:
+                mask = mask_resized.squeeze(1)
+                mask_2d = mask[0]
+            else:
+                mask = mask_resized.permute(0, 2, 3, 1)
+                mask_2d = mask[0, :, :, 0]
+        
+        # Apply inversion if requested
+        if invert_mask:
+            mask_2d = 1.0 - mask_2d
+            print("✓ Mask inverted")
+        
+        # Find bounding box
+        mask_binary = (mask_2d > 0.01).float()
+        nonzero = torch.nonzero(mask_binary, as_tuple=False)
+        
+        if nonzero.shape[0] == 0:
+            # Empty mask - return full image
+            print("⚠️ Empty mask - using full image")
+            bbox_x, bbox_y = 0, 0
+            bbox_width, bbox_height = width, height
+        else:
+            y_min = nonzero[:, 0].min().item()
+            y_max = nonzero[:, 0].max().item()
+            x_min = nonzero[:, 1].min().item()
+            x_max = nonzero[:, 1].max().item()
+            
+            # Add padding
+            y_min = max(0, y_min - padding)
+            y_max = min(height - 1, y_max + padding)
+            x_min = max(0, x_min - padding)
+            x_max = min(width - 1, x_max + padding)
+            
+            bbox_x = x_min
+            bbox_y = y_min
+            bbox_width = x_max - x_min + 1
+            bbox_height = y_max - y_min + 1
+            
+            print(f"✓ BBox: ({bbox_x}, {bbox_y}) {bbox_width}×{bbox_height}")
+        
+        # Crop image and mask
+        cropped_image = image[:, bbox_y:bbox_y+bbox_height, bbox_x:bbox_x+bbox_width, :]
+        cropped_mask_2d = mask_2d[bbox_y:bbox_y+bbox_height, bbox_x:bbox_x+bbox_width]
+        
+        # Expand mask to batch
+        if batch > 1:
+            cropped_mask = cropped_mask_2d.unsqueeze(0).repeat(batch, 1, 1)
+        else:
+            cropped_mask = cropped_mask_2d.unsqueeze(0)
+        
+        # Create masked composite (image with mask applied)
+        mask_expanded = cropped_mask.unsqueeze(-1).repeat(1, 1, 1, channels)
+        masked_composite = cropped_image * mask_expanded
+        
+        # Create bbox data bundle
+        bbox_data = {
+            "x": bbox_x,
+            "y": bbox_y,
+            "width": bbox_width,
+            "height": bbox_height,
+            "original_width": width,
+            "original_height": height
+        }
+        
+        # Info string
+        info = f"Crop: {bbox_width}×{bbox_height} at ({bbox_x},{bbox_y}) | Orig: {width}×{height}"
+        
+        print(f"✓ Outputs: Crop {bbox_width}×{bbox_height}")
+        print("="*60 + "\n")
+        
+        return (cropped_image, cropped_mask, masked_composite, bbox_data, info)
+
+
+class SimpleInpaintStitch:
+    """
+    SIMPLIFIED INPAINTING - STITCH
+    One-click stitch using bundled bbox data from SimpleInpaintCrop
+    Perfect for streamlined inpainting workflows
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "original_image": ("IMAGE",),
+                "processed_crop": ("IMAGE",),
+                "bbox_data": ("BBOX_DATA",),
+                "blend_mode": (["replace", "blend"], {
+                    "default": "replace",
+                    "tooltip": "Replace: hard edge, Blend: soft edge"
+                }),
+                "feather": ("INT", {
+                    "default": 8,
+                    "min": 0,
+                    "max": 100,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Edge feathering in pixels (blend mode only)"
+                }),
+            },
+            "optional": {
+                "blend_mask": ("MASK",),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("result",)
+    FUNCTION = "stitch_inpaint"
+    CATEGORY = "Texture Alchemist/Inpainting/Simple"
+    
+    def stitch_inpaint(self, original_image, processed_crop, bbox_data, blend_mode, feather, blend_mask=None):
+        """
+        Stitch processed crop back onto original using bundled bbox data
+        """
+        
+        print("\n" + "="*60)
+        print("Simple Inpaint Stitch")
+        print("="*60)
+        
+        # Extract bbox data from bundle
+        bbox_x = bbox_data["x"]
+        bbox_y = bbox_data["y"]
+        bbox_width = bbox_data["width"]
+        bbox_height = bbox_data["height"]
+        
+        print(f"Original: {original_image.shape}")
+        print(f"Processed crop: {processed_crop.shape}")
+        print(f"BBox: ({bbox_x}, {bbox_y}) {bbox_width}×{bbox_height}")
+        print(f"Mode: {blend_mode}")
+        
+        batch, height, width, channels = original_image.shape
+        
+        # Create result as copy of original
+        result = original_image.clone()
+        
+        # Resize processed crop if needed
+        crop_batch, crop_h, crop_w, crop_c = processed_crop.shape
+        if (crop_h, crop_w) != (bbox_height, bbox_width):
+            print(f"  Resizing crop: {crop_w}×{crop_h} → {bbox_width}×{bbox_height}")
+            processed_crop = F.interpolate(
+                processed_crop.permute(0, 3, 1, 2),
+                size=(bbox_height, bbox_width),
+                mode='bilinear',
+                align_corners=False
+            ).permute(0, 2, 3, 1)
+        
+        # Clamp bbox to image boundaries
+        x_end = min(bbox_x + bbox_width, width)
+        y_end = min(bbox_y + bbox_height, height)
+        actual_width = x_end - bbox_x
+        actual_height = y_end - bbox_y
+        
+        if (actual_width, actual_height) != (bbox_width, bbox_height):
+            print(f"  Clamping to boundaries: {actual_width}×{actual_height}")
+            processed_crop = processed_crop[:, :actual_height, :actual_width, :]
+        
+        if blend_mode == "replace":
+            # Hard composite
+            result[:, bbox_y:y_end, bbox_x:x_end, :] = processed_crop
+            print("✓ Hard composite")
+        else:  # blend
+            # Create blend mask
+            if blend_mask is not None:
+                # Use provided mask
+                print("  Using custom blend mask")
+                if len(blend_mask.shape) == 3:
+                    mask_2d = blend_mask[0]
+                else:
+                    mask_2d = blend_mask[0, :, :, 0]
+                
+                # Resize to crop size
+                if mask_2d.shape != (actual_height, actual_width):
+                    mask_reshaped = blend_mask.unsqueeze(1) if len(blend_mask.shape) == 3 else blend_mask.permute(0, 3, 1, 2)
+                    mask_resized = F.interpolate(
+                        mask_reshaped,
+                        size=(actual_height, actual_width),
+                        mode='bilinear',
+                        align_corners=False
+                    )
+                    blend_alpha = mask_resized[0, 0] if len(blend_mask.shape) == 3 else mask_resized[0, 0, :, :]
+                else:
+                    blend_alpha = mask_2d[:actual_height, :actual_width]
+            elif feather > 0:
+                # Create feathered edge mask
+                blend_alpha = torch.ones((actual_height, actual_width), 
+                                        device=original_image.device, 
+                                        dtype=original_image.dtype)
+                
+                feather_pixels = min(feather, actual_width // 2, actual_height // 2)
+                if feather_pixels > 0:
+                    for i in range(feather_pixels):
+                        alpha_value = i / feather_pixels
+                        # Feather all edges
+                        blend_alpha[i, :] = alpha_value
+                        blend_alpha[actual_height - 1 - i, :] = alpha_value
+                        blend_alpha[:, i] = torch.minimum(blend_alpha[:, i], 
+                                                         torch.tensor(alpha_value, device=blend_alpha.device))
+                        blend_alpha[:, actual_width - 1 - i] = torch.minimum(blend_alpha[:, actual_width - 1 - i],
+                                                                             torch.tensor(alpha_value, device=blend_alpha.device))
+                print(f"✓ Feathered blend ({feather_pixels}px)")
+            else:
+                # No feathering
+                blend_alpha = torch.ones((actual_height, actual_width), 
+                                        device=original_image.device, 
+                                        dtype=original_image.dtype)
+                print("✓ Soft blend (no feather)")
+            
+            # Apply blend
+            blend_alpha_expanded = blend_alpha.unsqueeze(0).unsqueeze(-1).repeat(batch, 1, 1, channels)
+            original_region = result[:, bbox_y:y_end, bbox_x:x_end, :]
+            result[:, bbox_y:y_end, bbox_x:x_end, :] = (
+                processed_crop * blend_alpha_expanded + 
+                original_region * (1 - blend_alpha_expanded)
+            )
+        
+        print(f"✓ Result: {result.shape}")
+        print("="*60 + "\n")
+        
+        return (result,)
+
+
+class QwenImagePrep:
+    """
+    Prepare images for Qwen vision encoders
+    Fixes dimension/shape errors by resizing to compatible resolutions
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "resolution": (["224x224", "280x280", "336x336", "448x448", "560x560", "672x672", "custom"], {
+                    "default": "448x448",
+                    "tooltip": "Target resolution (must be multiple of 14 for Qwen)"
+                }),
+                "resize_mode": (["stretch", "crop", "pad"], {
+                    "default": "crop",
+                    "tooltip": "How to fit image: stretch (distort), crop (maintain aspect), pad (add borders)"
+                }),
+                "interpolation": (["bilinear", "bicubic", "lanczos", "nearest"], {
+                    "default": "bicubic",
+                    "tooltip": "Resampling method"
+                }),
+            },
+            "optional": {
+                "custom_width": ("INT", {
+                    "default": 448,
+                    "min": 14,
+                    "max": 4096,
+                    "step": 14,
+                    "display": "number",
+                    "tooltip": "Custom width (must be multiple of 14)"
+                }),
+                "custom_height": ("INT", {
+                    "default": 448,
+                    "min": 14,
+                    "max": 4096,
+                    "step": 14,
+                    "display": "number",
+                    "tooltip": "Custom height (must be multiple of 14)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "STRING")
+    RETURN_NAMES = ("image", "width", "height", "info")
+    FUNCTION = "prep_image"
+    CATEGORY = "Texture Alchemist/Texture"
+    
+    def prep_image(self, image, resolution, resize_mode, interpolation, 
+                   custom_width=448, custom_height=448):
+        """
+        Resize and format image for Qwen encoder compatibility
+        """
+        
+        print("\n" + "="*60)
+        print("Qwen Image Prep")
+        print("="*60)
+        print(f"Input shape: {image.shape}")
+        print(f"Target resolution: {resolution}")
+        print(f"Resize mode: {resize_mode}")
+        
+        batch, in_height, in_width, channels = image.shape
+        
+        # Parse target resolution
+        if resolution == "custom":
+            # Ensure custom dimensions are multiples of 14
+            target_width = (custom_width // 14) * 14
+            target_height = (custom_height // 14) * 14
+            if target_width != custom_width or target_height != custom_height:
+                print(f"⚠️ Adjusted custom size to nearest multiple of 14:")
+                print(f"  {custom_width}×{custom_height} → {target_width}×{target_height}")
+        else:
+            # Parse preset resolution
+            target_width, target_height = map(int, resolution.split('x'))
+        
+        print(f"Target dimensions: {target_width}×{target_height}")
+        print(f"Input dimensions: {in_width}×{in_height}")
+        
+        # Determine interpolation mode
+        if interpolation == "bicubic":
+            mode = "bicubic"
+        elif interpolation == "lanczos":
+            mode = "bicubic"  # PyTorch doesn't have lanczos, use bicubic
+        elif interpolation == "nearest":
+            mode = "nearest"
+        else:  # bilinear
+            mode = "bilinear"
+        
+        # Process based on resize mode
+        if resize_mode == "stretch":
+            # Simple resize - may distort aspect ratio
+            result = self._resize_stretch(image, target_height, target_width, mode)
+            
+        elif resize_mode == "crop":
+            # Resize and center crop - maintains aspect ratio
+            result = self._resize_crop(image, target_height, target_width, mode)
+            
+        else:  # pad
+            # Resize and pad - maintains aspect ratio, no cropping
+            result = self._resize_pad(image, target_height, target_width, mode)
+        
+        # Ensure proper channel count (RGB)
+        if result.shape[-1] == 1:
+            # Grayscale to RGB
+            result = result.repeat(1, 1, 1, 3)
+            print("  Converted grayscale to RGB")
+        elif result.shape[-1] == 4:
+            # RGBA to RGB (drop alpha)
+            result = result[:, :, :, :3]
+            print("  Converted RGBA to RGB")
+        elif result.shape[-1] != 3:
+            # Other channel counts - take first 3 or pad
+            if result.shape[-1] > 3:
+                result = result[:, :, :, :3]
+            else:
+                # Pad to 3 channels
+                pad_channels = 3 - result.shape[-1]
+                padding = torch.zeros((batch, target_height, target_width, pad_channels),
+                                    device=result.device, dtype=result.dtype)
+                result = torch.cat([result, padding], dim=-1)
+            print(f"  Adjusted channels to 3")
+        
+        # Clamp to valid range
+        result = torch.clamp(result, 0.0, 1.0)
+        
+        # Create info string
+        aspect_in = in_width / in_height
+        aspect_out = target_width / target_height
+        info_lines = [
+            f"Input: {in_width}×{in_height}",
+            f"Output: {target_width}×{target_height}",
+            f"Mode: {resize_mode}",
+            f"Aspect: {aspect_in:.2f} → {aspect_out:.2f}"
+        ]
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n✓ Output shape: {result.shape}")
+        print(f"  Range: [{result.min():.3f}, {result.max():.3f}]")
+        print(f"  Channels: {result.shape[-1]}")
+        print(f"  Qwen-ready: ✓")
+        print("="*60 + "\n")
+        
+        return (result, target_width, target_height, info_string)
+    
+    def _resize_stretch(self, image, target_h, target_w, mode):
+        """Simple stretch resize"""
+        # Convert to BCHW for interpolate
+        image_bchw = image.permute(0, 3, 1, 2)
+        resized = F.interpolate(
+            image_bchw,
+            size=(target_h, target_w),
+            mode=mode,
+            align_corners=False if mode != "nearest" else None
+        )
+        return resized.permute(0, 2, 3, 1)
+    
+    def _resize_crop(self, image, target_h, target_w, mode):
+        """Resize and center crop to maintain aspect ratio"""
+        batch, in_h, in_w, channels = image.shape
+        
+        # Calculate scale to fill target while maintaining aspect
+        scale_h = target_h / in_h
+        scale_w = target_w / in_w
+        scale = max(scale_h, scale_w)  # Scale to fill
+        
+        # Resize to intermediate size
+        inter_h = int(in_h * scale)
+        inter_w = int(in_w * scale)
+        
+        image_bchw = image.permute(0, 3, 1, 2)
+        resized = F.interpolate(
+            image_bchw,
+            size=(inter_h, inter_w),
+            mode=mode,
+            align_corners=False if mode != "nearest" else None
+        )
+        resized = resized.permute(0, 2, 3, 1)
+        
+        # Center crop
+        crop_y = (inter_h - target_h) // 2
+        crop_x = (inter_w - target_w) // 2
+        cropped = resized[:, crop_y:crop_y+target_h, crop_x:crop_x+target_w, :]
+        
+        return cropped
+    
+    def _resize_pad(self, image, target_h, target_w, mode):
+        """Resize and pad to maintain aspect ratio"""
+        batch, in_h, in_w, channels = image.shape
+        
+        # Calculate scale to fit within target
+        scale_h = target_h / in_h
+        scale_w = target_w / in_w
+        scale = min(scale_h, scale_w)  # Scale to fit
+        
+        # Resize to intermediate size
+        inter_h = int(in_h * scale)
+        inter_w = int(in_w * scale)
+        
+        image_bchw = image.permute(0, 3, 1, 2)
+        resized = F.interpolate(
+            image_bchw,
+            size=(inter_h, inter_w),
+            mode=mode,
+            align_corners=False if mode != "nearest" else None
+        )
+        resized = resized.permute(0, 2, 3, 1)
+        
+        # Create padded image (black borders)
+        result = torch.zeros((batch, target_h, target_w, channels),
+                           device=image.device, dtype=image.dtype)
+        
+        # Center the resized image
+        pad_y = (target_h - inter_h) // 2
+        pad_x = (target_w - inter_w) // 2
+        result[:, pad_y:pad_y+inter_h, pad_x:pad_x+inter_w, :] = resized
+        
+        return result
+
+
+class CropToMaskWithPadding:
+    """
+    Crop image to mask bounds and expand canvas with padding
+    Padding adds new pixels (expands canvas), not just includes more source
+    Option to pad to square for uniform dimensions
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "padding": ("INT", {
+                    "default": 50,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Padding in pixels (expands canvas)"
+                }),
+                "pad_to_square": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Expand to square canvas (uses longest dimension)"
+                }),
+                "padding_color": (["black", "white", "mirror", "edge_extend"], {
+                    "default": "black",
+                    "tooltip": "How to fill padding area"
+                }),
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert mask (swap black/white)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "MASK", "INT", "INT", "INT", "INT", "STRING")
+    RETURN_NAMES = ("image", "mask", "original_width", "original_height", "crop_x", "crop_y", "info")
+    FUNCTION = "crop_and_pad"
+    CATEGORY = "Texture Alchemist/Texture"
+    
+    def crop_and_pad(self, image, mask, padding, pad_to_square, padding_color, invert_mask):
+        """
+        Crop to mask bounds and expand canvas with padding
+        """
+        
+        print("\n" + "="*60)
+        print("Crop to Mask with Padding")
+        print("="*60)
+        print(f"Image shape: {image.shape}")
+        print(f"Mask shape: {mask.shape}")
+        print(f"Padding: {padding}px")
+        print(f"Pad to square: {pad_to_square}")
+        print(f"Padding color: {padding_color}")
+        
+        batch, height, width, channels = image.shape
+        device = image.device
+        dtype = image.dtype
+        
+        # Ensure mask is 2D for this image
+        if len(mask.shape) == 3:  # (B, H, W)
+            mask_2d = mask[0]
+        else:  # (H, W)
+            mask_2d = mask
+        
+        # Resize mask if needed
+        if mask_2d.shape != (height, width):
+            mask_reshaped = mask.unsqueeze(0).unsqueeze(0) if len(mask.shape) == 2 else mask.unsqueeze(1)
+            mask_resized = F.interpolate(
+                mask_reshaped,
+                size=(height, width),
+                mode='bilinear',
+                align_corners=False
+            )
+            mask_2d = mask_resized[0, 0] if len(mask.shape) == 2 else mask_resized[0, 0]
+        
+        # Invert mask if requested
+        if invert_mask:
+            mask_2d = 1.0 - mask_2d
+            print(f"✓ Mask inverted")
+        
+        # Find bounding box of mask
+        print(f"\n🔍 Analyzing mask:")
+        print(f"  Mask shape: {mask_2d.shape}")
+        print(f"  Mask range: [{mask_2d.min():.3f}, {mask_2d.max():.3f}]")
+        print(f"  Pixels > 0.01: {(mask_2d > 0.01).sum().item()}")
+        print(f"  Pixels > 0.1: {(mask_2d > 0.1).sum().item()}")
+        print(f"  Pixels > 0.5: {(mask_2d > 0.5).sum().item()}")
+        print(f"  Pixels > 0.9: {(mask_2d > 0.9).sum().item()}")
+        
+        # Check edges for scattered pixels
+        print(f"\n🔍 Edge analysis:")
+        print(f"  Top-left corner (0,0): {mask_2d[0, 0]:.3f}")
+        print(f"  Top-right corner (0,-1): {mask_2d[0, -1]:.3f}")
+        print(f"  Bottom-left corner (-1,0): {mask_2d[-1, 0]:.3f}")
+        print(f"  Bottom-right corner (-1,-1): {mask_2d[-1, -1]:.3f}")
+        print(f"  Top row max: {mask_2d[0, :].max():.3f}")
+        print(f"  Bottom row max: {mask_2d[-1, :].max():.3f}")
+        print(f"  Left column max: {mask_2d[:, 0].max():.3f}")
+        print(f"  Right column max: {mask_2d[:, -1].max():.3f}")
+        
+        # Use higher threshold to avoid noise
+        mask_binary = (mask_2d > 0.95).float()  # Even higher threshold!
+        nonzero = torch.nonzero(mask_binary, as_tuple=False)
+        
+        print(f"  Non-zero count: {nonzero.shape[0]}")
+        
+        if nonzero.shape[0] == 0:
+            # Empty mask - return original image
+            print("\n⚠️ Empty mask detected - returning original")
+            return (image, mask, width, height, 0, 0, "Empty mask")
+        
+        # Get bounding box
+        y_min = nonzero[:, 0].min().item()
+        y_max = nonzero[:, 0].max().item()
+        x_min = nonzero[:, 1].min().item()
+        x_max = nonzero[:, 1].max().item()
+        
+        # Calculate crop dimensions
+        crop_width = x_max - x_min + 1
+        crop_height = y_max - y_min + 1
+        
+        print(f"\n✓ Mask bounds found:")
+        print(f"  Position: ({x_min}, {y_min})")
+        print(f"  Size: {crop_width} × {crop_height}")
+        print(f"  Original canvas: {width} × {height}")
+        print(f"  Crop reduces canvas by: {((1 - (crop_width * crop_height) / (width * height)) * 100):.1f}%")
+        
+        # Crop image and mask to bounds
+        cropped_image = image[:, y_min:y_max+1, x_min:x_max+1, :]
+        cropped_mask = mask_2d[y_min:y_max+1, x_min:x_max+1]
+        
+        # If we inverted for detection, invert back for output
+        if invert_mask:
+            cropped_mask = 1.0 - cropped_mask
+        
+        print(f"\n✂️ Cropping:")
+        print(f"  Cropped image: {cropped_image.shape}")
+        print(f"  Cropped mask: {cropped_mask.shape}")
+        print(f"  Expected: [{batch}, {crop_height}, {crop_width}, {channels}]")
+        
+        # Add padding (expand canvas)
+        if padding > 0 or pad_to_square:
+            # Calculate final dimensions
+            if pad_to_square:
+                max_dim = max(crop_width, crop_height)
+                final_width = max_dim + (padding * 2)
+                final_height = max_dim + (padding * 2)
+            else:
+                final_width = crop_width + (padding * 2)
+                final_height = crop_height + (padding * 2)
+            
+            print(f"\n✓ Expanding canvas:")
+            print(f"  From: {crop_width} × {crop_height}")
+            print(f"  To: {final_width} × {final_height}")
+            
+            # Create padded canvas
+            if padding_color == "black":
+                padded_image = torch.zeros((batch, final_height, final_width, channels), 
+                                          device=device, dtype=dtype)
+                padded_mask = torch.zeros((final_height, final_width), 
+                                         device=device, dtype=dtype)
+            elif padding_color == "white":
+                padded_image = torch.ones((batch, final_height, final_width, channels), 
+                                         device=device, dtype=dtype)
+                padded_mask = torch.zeros((final_height, final_width), 
+                                         device=device, dtype=dtype)
+            else:
+                # For mirror and edge_extend, start with zeros
+                padded_image = torch.zeros((batch, final_height, final_width, channels), 
+                                          device=device, dtype=dtype)
+                padded_mask = torch.zeros((final_height, final_width), 
+                                         device=device, dtype=dtype)
+            
+            # Calculate center position
+            y_offset = (final_height - crop_height) // 2
+            x_offset = (final_width - crop_width) // 2
+            
+            # Place cropped content in center
+            padded_image[:, y_offset:y_offset+crop_height, x_offset:x_offset+crop_width, :] = cropped_image
+            padded_mask[y_offset:y_offset+crop_height, x_offset:x_offset+crop_width] = cropped_mask
+            
+            # Apply padding style
+            if padding_color == "mirror":
+                padded_image = self._apply_mirror_padding(
+                    padded_image, cropped_image, 
+                    y_offset, x_offset, crop_height, crop_width
+                )
+            elif padding_color == "edge_extend":
+                padded_image = self._apply_edge_extend(
+                    padded_image, cropped_image,
+                    y_offset, x_offset, crop_height, crop_width
+                )
+            
+            result_image = padded_image
+            result_mask = padded_mask.unsqueeze(0)  # Add batch dim
+        else:
+            result_image = cropped_image
+            result_mask = cropped_mask.unsqueeze(0)
+            final_width = crop_width
+            final_height = crop_height
+        
+        # Create info string
+        info_lines = [
+            f"Original: {width}×{height}",
+            f"Crop: {crop_width}×{crop_height}",
+            f"Final: {final_width}×{final_height}",
+            f"Position: ({x_min},{y_min})"
+        ]
+        info_string = " | ".join(info_lines)
+        
+        print(f"\n✓ Output:")
+        print(f"  Result image: {result_image.shape}")
+        print(f"  Result mask: {result_mask.shape}")
+        print(f"  Original dimensions: {width}×{height}")
+        print(f"  Final dimensions: {final_width}×{final_height}")
+        print(f"  Crop position: ({x_min}, {y_min})")
+        print(f"  Canvas reduced: {width}×{height} → {final_width}×{final_height}")
+        print("="*60 + "\n")
+        
+        return (result_image, result_mask, width, height, x_min, y_min, info_string)
+    
+    def _apply_mirror_padding(self, padded, cropped, y_off, x_off, h, w):
+        """Mirror edges for padding"""
+        batch = padded.shape[0]
+        
+        # Mirror top
+        if y_off > 0:
+            mirror_h = min(y_off, h)
+            padded[:, y_off-mirror_h:y_off, x_off:x_off+w, :] = torch.flip(
+                cropped[:, :mirror_h, :, :], [1]
+            )
+        
+        # Mirror bottom
+        if y_off + h < padded.shape[1]:
+            mirror_h = min(padded.shape[1] - (y_off + h), h)
+            padded[:, y_off+h:y_off+h+mirror_h, x_off:x_off+w, :] = torch.flip(
+                cropped[:, h-mirror_h:h, :, :], [1]
+            )
+        
+        # Mirror left
+        if x_off > 0:
+            mirror_w = min(x_off, w)
+            padded[:, y_off:y_off+h, x_off-mirror_w:x_off, :] = torch.flip(
+                cropped[:, :, :mirror_w, :], [2]
+            )
+        
+        # Mirror right
+        if x_off + w < padded.shape[2]:
+            mirror_w = min(padded.shape[2] - (x_off + w), w)
+            padded[:, y_off:y_off+h, x_off+w:x_off+w+mirror_w, :] = torch.flip(
+                cropped[:, :, w-mirror_w:w, :], [2]
+            )
+        
+        return padded
+    
+    def _apply_edge_extend(self, padded, cropped, y_off, x_off, h, w):
+        """Extend edges for padding"""
+        batch = padded.shape[0]
+        
+        # Extend top
+        if y_off > 0:
+            padded[:, :y_off, x_off:x_off+w, :] = cropped[:, 0:1, :, :].repeat(1, y_off, 1, 1)
+        
+        # Extend bottom
+        if y_off + h < padded.shape[1]:
+            padded[:, y_off+h:, x_off:x_off+w, :] = cropped[:, -1:, :, :].repeat(
+                1, padded.shape[1] - (y_off + h), 1, 1
+            )
+        
+        # Extend left
+        if x_off > 0:
+            padded[:, y_off:y_off+h, :x_off, :] = cropped[:, :, 0:1, :].repeat(1, 1, x_off, 1)
+        
+        # Extend right
+        if x_off + w < padded.shape[2]:
+            padded[:, y_off:y_off+h, x_off+w:, :] = cropped[:, :, -1:, :].repeat(
+                1, 1, padded.shape[2] - (x_off + w), 1
+            )
+        
+        return padded
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "SeamlessTiling": SeamlessTiling,
@@ -1576,6 +2854,13 @@ NODE_CLASS_MAPPINGS = {
     "TextureEqualizer": TextureEqualizer,
     "UpscaleCalculator": UpscaleCalculator,
     "UpscaleToResolution": UpscaleToResolution,
+    "PaddingCalculator": PaddingCalculator,
+    "InpaintCropExtractor": InpaintCropExtractor,
+    "InpaintStitcher": InpaintStitcher,
+    "SimpleInpaintCrop": SimpleInpaintCrop,
+    "SimpleInpaintStitch": SimpleInpaintStitch,
+    "QwenImagePrep": QwenImagePrep,
+    "CropToMaskWithPadding": CropToMaskWithPadding,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1589,5 +2874,12 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TextureEqualizer": "Texture Equalizer",
     "UpscaleCalculator": "Upscale Calculator (Multi-Pass)",
     "UpscaleToResolution": "Upscale to Resolution (Multi-Pass)",
+    "PaddingCalculator": "Padding Calculator",
+    "InpaintCropExtractor": "Inpaint Crop Extractor (Advanced)",
+    "InpaintStitcher": "Inpaint Stitcher (Advanced)",
+    "SimpleInpaintCrop": "Simple Inpaint Crop ⚡",
+    "SimpleInpaintStitch": "Simple Inpaint Stitch ⚡",
+    "QwenImagePrep": "Qwen Image Prep",
+    "CropToMaskWithPadding": "Crop to Mask (with Padding)",
 }
 

@@ -444,15 +444,207 @@ class HSVAdjuster:
         return torch.stack([r, g, b], dim=-1)
 
 
+class ColorImage:
+    """
+    Generate solid color image with interactive color picker
+    Choose any color using color wheel or hex input
+    Supports alpha channel for transparency
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "width": ("INT", {
+                    "default": 512,
+                    "min": 16,
+                    "max": 8192,
+                    "step": 8,
+                    "display": "number",
+                    "tooltip": "Image width in pixels"
+                }),
+                "height": ("INT", {
+                    "default": 512,
+                    "min": 16,
+                    "max": 8192,
+                    "step": 8,
+                    "display": "number",
+                    "tooltip": "Image height in pixels"
+                }),
+                "color": ("STRING", {
+                    "default": "#FF0000",
+                    "multiline": False,
+                    "tooltip": "Color in hex format (e.g., #FF0000 for red)"
+                }),
+                "batch_size": ("INT", {
+                    "default": 1,
+                    "min": 1,
+                    "max": 64,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Number of images to generate"
+                }),
+            },
+            "hidden": {
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE",)
+    RETURN_NAMES = ("image",)
+    FUNCTION = "generate_color_image"
+    CATEGORY = "Texture Alchemist/Color"
+    
+    def generate_color_image(self, width, height, color, batch_size, alpha=1.0):
+        """
+        Generate a solid color RGBA image
+        """
+        
+        print("\n" + "="*60)
+        print("Color Image Generator")
+        print("="*60)
+        print(f"Dimensions: {width}×{height}")
+        print(f"Color: {color}")
+        print(f"Alpha: {alpha:.2f}")
+        print(f"Batch size: {batch_size}")
+        
+        # Parse hex color
+        color = color.strip()
+        if not color.startswith('#'):
+            color = '#' + color
+        
+        # Remove # and parse
+        try:
+            hex_color = color.lstrip('#')
+            
+            # Support both #RGB and #RRGGBB formats
+            if len(hex_color) == 3:
+                hex_color = ''.join([c*2 for c in hex_color])
+            
+            if len(hex_color) != 6:
+                print(f"⚠️ Invalid color format: {color}, using red")
+                r, g, b = 1.0, 0.0, 0.0
+            else:
+                r = int(hex_color[0:2], 16) / 255.0
+                g = int(hex_color[2:4], 16) / 255.0
+                b = int(hex_color[4:6], 16) / 255.0
+                
+            print(f"✓ RGBA: ({r:.3f}, {g:.3f}, {b:.3f}, {alpha:.3f})")
+            
+        except ValueError as e:
+            print(f"⚠️ Error parsing color: {e}, using red")
+            r, g, b = 1.0, 0.0, 0.0
+        
+        # Create RGBA image tensor (B, H, W, 4)
+        image = torch.zeros(batch_size, height, width, 4, dtype=torch.float32)
+        image[:, :, :, 0] = r
+        image[:, :, :, 1] = g
+        image[:, :, :, 2] = b
+        image[:, :, :, 3] = alpha
+        
+        print(f"✓ Generated RGBA image: {image.shape}")
+        print("="*60 + "\n")
+        
+        return (image,)
+
+
+class ColorCode:
+    """
+    Color picker that outputs color codes instead of images
+    Get hex, RGB, and RGBA values with interactive picker and eyedropper
+    Supports alpha channel for transparency
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "color": ("STRING", {
+                    "default": "#FF0000",
+                    "multiline": False,
+                    "tooltip": "Color in hex format (e.g., #FF0000 for red)"
+                }),
+            },
+            "hidden": {
+                "alpha": ("FLOAT", {
+                    "default": 1.0,
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("STRING", "STRING", "STRING", "FLOAT")
+    RETURN_NAMES = ("hex", "rgb", "rgba", "alpha")
+    FUNCTION = "get_color_values"
+    CATEGORY = "Texture Alchemist/Color"
+    
+    def get_color_values(self, color, alpha=1.0):
+        """
+        Parse color and return hex, RGB, RGBA format outputs with alpha
+        """
+        
+        print("\n" + "="*60)
+        print("Color Code")
+        print("="*60)
+        print(f"Input color: {color}")
+        print(f"Alpha: {alpha:.2f}")
+        
+        # Parse hex color
+        color = color.strip()
+        if not color.startswith('#'):
+            color = '#' + color
+        
+        # Remove # and parse
+        try:
+            hex_color = color.lstrip('#')
+            
+            # Support both #RGB and #RRGGBB formats
+            if len(hex_color) == 3:
+                hex_color = ''.join([c*2 for c in hex_color])
+            
+            if len(hex_color) != 6:
+                print(f"⚠️ Invalid color format: {color}, using red")
+                r, g, b = 255, 0, 0
+            else:
+                r = int(hex_color[0:2], 16)
+                g = int(hex_color[2:4], 16)
+                b = int(hex_color[4:6], 16)
+            
+            # Create output strings
+            hex_out = color.upper()
+            rgb_out = f"rgb({r}, {g}, {b})"
+            rgba_out = f"rgba({r}, {g}, {b}, {alpha:.2f})"
+            
+            print(f"✓ Hex: {hex_out}")
+            print(f"✓ RGB: {rgb_out}")
+            print(f"✓ RGBA: {rgba_out}")
+            print(f"✓ Alpha: {alpha:.2f}")
+            
+        except ValueError as e:
+            print(f"⚠️ Error parsing color: {e}, using red")
+            hex_out = "#FF0000"
+            rgb_out = "rgb(255, 0, 0)"
+            rgba_out = f"rgba(255, 0, 0, {alpha:.2f})"
+        
+        print("="*60 + "\n")
+        
+        return (hex_out, rgb_out, rgba_out, alpha)
+
+
 NODE_CLASS_MAPPINGS = {
     "ColorRamp": ColorRamp,
     "SimpleRecolor": SimpleRecolor,
     "HSVAdjuster": HSVAdjuster,
+    "ColorImage": ColorImage,
+    "ColorCode": ColorCode,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
     "ColorRamp": "Color Ramp",
     "SimpleRecolor": "Simple Recolor",
     "HSVAdjuster": "HSV Adjuster",
+    "ColorImage": "Color Image 🎨",
+    "ColorCode": "Color Code 🎨",
 }
 
