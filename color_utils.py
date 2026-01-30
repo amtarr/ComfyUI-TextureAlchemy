@@ -632,12 +632,106 @@ class ColorCode:
         return (hex_out, rgb_out, rgba_out, alpha)
 
 
+class GetAverageColor:
+    """
+    Calculate the average color of an image and output as hex code
+    Useful for color picking and padding
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+            },
+            "optional": {
+                "mask": ("MASK", {
+                    "tooltip": "Optional mask to only average visible regions"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("STRING",)
+    RETURN_NAMES = ("hex_color",)
+    FUNCTION = "get_average"
+    CATEGORY = "Texture Alchemist/Color"
+    
+    def get_average(self, image, mask=None):
+        """
+        Calculate average color and return as hex
+        """
+        
+        print("\n" + "="*60)
+        print("Get Average Color")
+        print("="*60)
+        print(f"Image: {image.shape}")
+        
+        batch, height, width, channels = image.shape
+        
+        # Use first batch item
+        img = image[0]  # (H, W, C)
+        
+        if mask is not None:
+            print(f"Mask: {mask.shape}")
+            # Get mask for first batch
+            if len(mask.shape) == 3:
+                mask_2d = mask[0]  # (H, W)
+            else:
+                mask_2d = mask
+            
+            # Resize mask if needed
+            if mask_2d.shape != (height, width):
+                import torch.nn.functional as F
+                mask_reshaped = mask_2d.unsqueeze(0).unsqueeze(0)
+                mask_resized = F.interpolate(
+                    mask_reshaped,
+                    size=(height, width),
+                    mode='bilinear',
+                    align_corners=False
+                )
+                mask_2d = mask_resized[0, 0]
+            
+            # Expand mask to match channels
+            mask_expanded = mask_2d.unsqueeze(-1).expand(-1, -1, channels)
+            
+            # Apply mask
+            masked_img = img * mask_expanded
+            
+            # Calculate average only in masked regions
+            mask_sum = mask_2d.sum()
+            if mask_sum > 0:
+                avg_color = masked_img.sum(dim=[0, 1]) / mask_sum
+            else:
+                # Empty mask - use full image
+                avg_color = img.mean(dim=[0, 1])
+                print("⚠️ Empty mask - using full image average")
+        else:
+            # No mask - average entire image
+            avg_color = img.mean(dim=[0, 1])
+        
+        # Convert to 0-255 range
+        r = int(avg_color[0].item() * 255)
+        g = int(avg_color[1].item() * 255)
+        b = int(avg_color[2].item() * 255)
+        
+        # Format as hex
+        hex_color = f"#{r:02X}{g:02X}{b:02X}"
+        
+        print(f"✓ Average color:")
+        print(f"  RGB: ({r}, {g}, {b})")
+        print(f"  Hex: {hex_color}")
+        print("="*60 + "\n")
+        
+        return (hex_color,)
+
+
 NODE_CLASS_MAPPINGS = {
     "ColorRamp": ColorRamp,
     "SimpleRecolor": SimpleRecolor,
     "HSVAdjuster": HSVAdjuster,
     "ColorImage": ColorImage,
     "ColorCode": ColorCode,
+    "GetAverageColor": GetAverageColor,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -646,5 +740,6 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "HSVAdjuster": "HSV Adjuster",
     "ColorImage": "Color Image 🎨",
     "ColorCode": "Color Code 🎨",
+    "GetAverageColor": "Get Average Color 🎨",
 }
 
