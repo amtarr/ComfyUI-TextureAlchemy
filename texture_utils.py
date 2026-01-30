@@ -3267,6 +3267,458 @@ class SimpleCropToMaskWithPadding:
 
 
 # Node registration
+class BBoxReposition:
+    """
+    Reposition an image on a base canvas using bbox data
+    Supports 9 anchor positions (corners, edges, center)
+    Outputs repositioned image with updated bbox data
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "base_image": ("IMAGE",),
+                "bbox_data": ("BBOX_DATA",),
+                "position": (["top_left", "top_center", "top_right", 
+                             "center_left", "center", "center_right",
+                             "bottom_left", "bottom_center", "bottom_right"], {
+                    "default": "center",
+                    "tooltip": "Where to position the image on the base canvas"
+                }),
+                "blend_mode": (["replace", "blend"], {
+                    "default": "replace",
+                    "tooltip": "Replace or alpha blend with base"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "BBOX_DATA", "STRING")
+    RETURN_NAMES = ("image", "bbox_data", "info")
+    FUNCTION = "reposition"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def reposition(self, image, base_image, bbox_data, position, blend_mode):
+        """
+        Reposition image on base canvas according to anchor position
+        """
+        
+        print("\n" + "="*60)
+        print("BBox Reposition")
+        print("="*60)
+        print(f"Image: {image.shape}")
+        print(f"Base: {base_image.shape}")
+        print(f"Position: {position}")
+        print(f"BBox Data: {bbox_data}")
+        
+        batch, img_h, img_w, channels = image.shape
+        base_batch, base_h, base_w, base_channels = base_image.shape
+        
+        # Match channels if needed
+        if channels != base_channels:
+            print(f"  Channel mismatch: image={channels}, base={base_channels}")
+            if channels == 3 and base_channels == 4:
+                # Add alpha to image
+                alpha = torch.ones((batch, img_h, img_w, 1), device=image.device, dtype=image.dtype)
+                image = torch.cat([image, alpha], dim=-1)
+                channels = 4
+                print("  Added alpha channel to image")
+            elif channels == 4 and base_channels == 3:
+                # Drop alpha from image
+                image = image[:, :, :, :3]
+                channels = 3
+                print("  Dropped alpha channel from image")
+        
+        # Calculate position on base canvas
+        if position == "top_left":
+            new_x, new_y = 0, 0
+        elif position == "top_center":
+            new_x, new_y = (base_w - img_w) // 2, 0
+        elif position == "top_right":
+            new_x, new_y = base_w - img_w, 0
+        elif position == "center_left":
+            new_x, new_y = 0, (base_h - img_h) // 2
+        elif position == "center":
+            new_x, new_y = (base_w - img_w) // 2, (base_h - img_h) // 2
+        elif position == "center_right":
+            new_x, new_y = base_w - img_w, (base_h - img_h) // 2
+        elif position == "bottom_left":
+            new_x, new_y = 0, base_h - img_h
+        elif position == "bottom_center":
+            new_x, new_y = (base_w - img_w) // 2, base_h - img_h
+        elif position == "bottom_right":
+            new_x, new_y = base_w - img_w, base_h - img_h
+        
+        # Clamp to boundaries
+        new_x = max(0, min(new_x, base_w - 1))
+        new_y = max(0, min(new_y, base_h - 1))
+        
+        # Calculate actual paste region
+        paste_w = min(img_w, base_w - new_x)
+        paste_h = min(img_h, base_h - new_y)
+        
+        print(f"✓ New position: ({new_x}, {new_y})")
+        print(f"  Paste region: {paste_w}×{paste_h}")
+        
+        # Create result (copy of base)
+        result = base_image.clone()
+        
+        # Paste image
+        if blend_mode == "replace":
+            result[:, new_y:new_y+paste_h, new_x:new_x+paste_w, :] = image[:, :paste_h, :paste_w, :]
+        else:  # blend
+            # Simple alpha blend
+            result[:, new_y:new_y+paste_h, new_x:new_x+paste_w, :] = (
+                result[:, new_y:new_y+paste_h, new_x:new_x+paste_w, :] * 0.5 +
+                image[:, :paste_h, :paste_w, :] * 0.5
+            )
+        
+        # Create updated bbox data
+        new_bbox_data = {
+            "x": new_x,
+            "y": new_y,
+            "width": img_w,
+            "height": img_h,
+            "original_width": base_w,
+            "original_height": base_h
+        }
+        
+        info = f"Repositioned to {position}: ({new_x}, {new_y}) on {base_w}×{base_h} canvas"
+        
+        print(f"✓ Updated BBox: {new_bbox_data}")
+        print("="*60 + "\n")
+        
+        return (result, new_bbox_data, info)
+
+
+class PatchUpscale:
+    """
+    Upscale a cropped patch to target megapixels for high-quality processing
+    Outputs scale data for PatchFit to restore original dimensions
+    Perfect for inpainting workflows: crop → upscale → process → downscale → stitch
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "target_megapixels": ("FLOAT", {
+                    "default": 2.0,
+                    "min": 0.5,
+                    "max": 16.0,
+                    "step": 0.1,
+                    "display": "number",
+                    "tooltip": "Target resolution in megapixels (e.g., 2.0 = 2MP)"
+                }),
+                "max_dimension": ("INT", {
+                    "default": 2048,
+                    "min": 512,
+                    "max": 8192,
+                    "step": 64,
+                    "tooltip": "Maximum width/height (prevents extreme upscaling)"
+                }),
+                "upscale_method": (["bicubic", "bilinear", "lanczos", "nearest"], {
+                    "default": "bicubic",
+                    "tooltip": "Interpolation method for upscaling"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "PATCH_SCALE_DATA", "STRING")
+    RETURN_NAMES = ("upscaled_image", "scale_data", "info")
+    FUNCTION = "upscale_patch"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def upscale_patch(self, image, target_megapixels, max_dimension, upscale_method):
+        """
+        Upscale patch to target megapixels while preserving aspect ratio
+        """
+        
+        print("\n" + "="*60)
+        print("Patch Upscale")
+        print("="*60)
+        
+        batch, height, width, channels = image.shape
+        original_mp = (width * height) / 1_000_000
+        aspect_ratio = width / height
+        
+        print(f"Original: {width}×{height} ({original_mp:.2f}MP)")
+        print(f"Aspect ratio: {aspect_ratio:.3f}")
+        print(f"Target: {target_megapixels}MP")
+        
+        # Calculate target dimensions
+        # total_pixels = target_megapixels * 1_000_000
+        # width * height = total_pixels
+        # width / height = aspect_ratio
+        # width = aspect_ratio * height
+        # (aspect_ratio * height) * height = total_pixels
+        # height^2 = total_pixels / aspect_ratio
+        
+        target_pixels = target_megapixels * 1_000_000
+        new_height = int((target_pixels / aspect_ratio) ** 0.5)
+        new_width = int(new_height * aspect_ratio)
+        
+        # Clamp to max dimension
+        if new_width > max_dimension or new_height > max_dimension:
+            if new_width > new_height:
+                scale = max_dimension / new_width
+            else:
+                scale = max_dimension / new_height
+            new_width = int(new_width * scale)
+            new_height = int(new_height * scale)
+            print(f"  Clamped to max dimension: {max_dimension}")
+        
+        # Don't downscale (only upscale or keep same)
+        if new_width < width or new_height < height:
+            new_width = width
+            new_height = height
+            print(f"  Already at or above target MP - keeping original size")
+        
+        final_mp = (new_width * new_height) / 1_000_000
+        scale_factor = new_width / width
+        
+        print(f"✓ New dimensions: {new_width}×{new_height} ({final_mp:.2f}MP)")
+        print(f"  Scale factor: {scale_factor:.3f}x")
+        
+        # Perform upscale
+        if new_width != width or new_height != height:
+            # Map method names to torch interpolation modes
+            mode_map = {
+                "bicubic": "bicubic",
+                "bilinear": "bilinear",
+                "lanczos": "bicubic",  # torch doesn't have lanczos, use bicubic
+                "nearest": "nearest"
+            }
+            mode = mode_map.get(upscale_method, "bicubic")
+            
+            upscaled = F.interpolate(
+                image.permute(0, 3, 1, 2),
+                size=(new_height, new_width),
+                mode=mode,
+                align_corners=False if mode != "nearest" else None
+            ).permute(0, 2, 3, 1)
+            
+            print(f"  Method: {upscale_method}")
+        else:
+            upscaled = image
+            print(f"  No upscaling needed")
+        
+        # Create scale data for PatchFit
+        scale_data = {
+            "original_width": width,
+            "original_height": height,
+            "upscaled_width": new_width,
+            "upscaled_height": new_height,
+            "scale_factor": scale_factor,
+            "target_megapixels": target_megapixels,
+            "actual_megapixels": final_mp
+        }
+        
+        info = f"Upscaled {width}×{height} → {new_width}×{new_height} ({scale_factor:.2f}x, {final_mp:.2f}MP)"
+        
+        print(f"✓ Scale data saved for PatchFit")
+        print("="*60 + "\n")
+        
+        return (upscaled, scale_data, info)
+
+
+class PatchFit:
+    """
+    Downscale processed patch back to original dimensions
+    Uses scale data from PatchUpscale to restore exact original size
+    Completes the workflow: crop → upscale → process → fit → stitch
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "scale_data": ("PATCH_SCALE_DATA",),
+                "downscale_method": (["bicubic", "bilinear", "lanczos", "area"], {
+                    "default": "area",
+                    "tooltip": "Interpolation method for downscaling (area is best for downscaling)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("IMAGE", "STRING")
+    RETURN_NAMES = ("fitted_image", "info")
+    FUNCTION = "fit_patch"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def fit_patch(self, image, scale_data, downscale_method):
+        """
+        Downscale processed patch back to original dimensions
+        """
+        
+        print("\n" + "="*60)
+        print("Patch Fit")
+        print("="*60)
+        
+        batch, height, width, channels = image.shape
+        
+        target_width = scale_data["original_width"]
+        target_height = scale_data["original_height"]
+        original_scale = scale_data["scale_factor"]
+        
+        print(f"Current: {width}×{height}")
+        print(f"Target: {target_width}×{target_height}")
+        print(f"Original scale factor: {original_scale:.3f}x")
+        
+        # Check if dimensions match expected upscaled size
+        expected_width = scale_data["upscaled_width"]
+        expected_height = scale_data["upscaled_height"]
+        
+        if width != expected_width or height != expected_height:
+            print(f"⚠️  Warning: Image size doesn't match expected upscaled size")
+            print(f"   Expected: {expected_width}×{expected_height}")
+            print(f"   Actual: {width}×{height}")
+            print(f"   Continuing with downscale anyway...")
+        
+        # Perform downscale
+        if width != target_width or height != target_height:
+            # Map method names to torch interpolation modes
+            mode_map = {
+                "bicubic": "bicubic",
+                "bilinear": "bilinear",
+                "lanczos": "bicubic",  # torch doesn't have lanczos, use bicubic
+                "area": "area",
+                "nearest": "nearest"
+            }
+            mode = mode_map.get(downscale_method, "area")
+            
+            fitted = F.interpolate(
+                image.permute(0, 3, 1, 2),
+                size=(target_height, target_width),
+                mode=mode,
+                align_corners=False if mode not in ["nearest", "area"] else None
+            ).permute(0, 2, 3, 1)
+            
+            actual_scale = target_width / width
+            print(f"✓ Downscaled: {width}×{height} → {target_width}×{target_height}")
+            print(f"  Scale factor: {actual_scale:.3f}x")
+            print(f"  Method: {downscale_method}")
+        else:
+            fitted = image
+            print(f"✓ Already at target size - no downscaling needed")
+        
+        info = f"Fitted {width}×{height} → {target_width}×{target_height} (ready for stitching)"
+        
+        print(f"✓ Ready for stitching back into composition")
+        print("="*60 + "\n")
+        
+        return (fitted, info)
+
+
+class BBoxEditor:
+    """
+    Manually edit/override bbox data values
+    Useful for fine-tuning or correcting bbox coordinates
+    """
+    
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "bbox_data": ("BBOX_DATA",),
+                "override_x": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override X position (-1 = keep original)"
+                }),
+                "override_y": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override Y position (-1 = keep original)"
+                }),
+                "override_width": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override width (-1 = keep original)"
+                }),
+                "override_height": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override height (-1 = keep original)"
+                }),
+                "override_original_width": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override original canvas width (-1 = keep original)"
+                }),
+                "override_original_height": ("INT", {
+                    "default": -1,
+                    "min": -1,
+                    "max": 10000,
+                    "tooltip": "Override original canvas height (-1 = keep original)"
+                }),
+            }
+        }
+    
+    RETURN_TYPES = ("BBOX_DATA", "STRING")
+    RETURN_NAMES = ("bbox_data", "info")
+    FUNCTION = "edit_bbox"
+    CATEGORY = "Texture Alchemist/Inpainting"
+    
+    def edit_bbox(self, bbox_data, override_x, override_y, override_width, override_height, 
+                  override_original_width, override_original_height):
+        """
+        Override bbox data values with user-specified values
+        """
+        
+        print("\n" + "="*60)
+        print("BBox Editor")
+        print("="*60)
+        print(f"Original BBox: {bbox_data}")
+        
+        # Create new bbox data with overrides
+        new_bbox_data = {
+            "x": bbox_data.get("x", 0) if override_x == -1 else override_x,
+            "y": bbox_data.get("y", 0) if override_y == -1 else override_y,
+            "width": bbox_data.get("width", 0) if override_width == -1 else override_width,
+            "height": bbox_data.get("height", 0) if override_height == -1 else override_height,
+            "original_width": bbox_data.get("original_width", 0) if override_original_width == -1 else override_original_width,
+            "original_height": bbox_data.get("original_height", 0) if override_original_height == -1 else override_original_height
+        }
+        
+        # Build info string showing what changed
+        changes = []
+        if override_x != -1:
+            changes.append(f"x: {bbox_data.get('x')} → {new_bbox_data['x']}")
+        if override_y != -1:
+            changes.append(f"y: {bbox_data.get('y')} → {new_bbox_data['y']}")
+        if override_width != -1:
+            changes.append(f"width: {bbox_data.get('width')} → {new_bbox_data['width']}")
+        if override_height != -1:
+            changes.append(f"height: {bbox_data.get('height')} → {new_bbox_data['height']}")
+        if override_original_width != -1:
+            changes.append(f"orig_w: {bbox_data.get('original_width')} → {new_bbox_data['original_width']}")
+        if override_original_height != -1:
+            changes.append(f"orig_h: {bbox_data.get('original_height')} → {new_bbox_data['original_height']}")
+        
+        if changes:
+            info = "Modified: " + ", ".join(changes)
+            print(f"✓ Changes: {len(changes)}")
+            for change in changes:
+                print(f"  - {change}")
+        else:
+            info = "No changes (all overrides set to -1)"
+            print("  No changes made")
+        
+        print(f"✓ New BBox: {new_bbox_data}")
+        print("="*60 + "\n")
+        
+        return (new_bbox_data, info)
+
+
 NODE_CLASS_MAPPINGS = {
     "SeamlessTiling": SeamlessTiling,
     "TextureScaler": TextureScaler,
@@ -3286,6 +3738,10 @@ NODE_CLASS_MAPPINGS = {
     "QwenImagePrep": QwenImagePrep,
     "CropToMaskWithPadding": CropToMaskWithPadding,
     "SimpleCropToMaskWithPadding": SimpleCropToMaskWithPadding,
+    "BBoxReposition": BBoxReposition,
+    "BBoxEditor": BBoxEditor,
+    "PatchUpscale": PatchUpscale,
+    "PatchFit": PatchFit,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -3307,5 +3763,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenImagePrep": "Qwen Image Prep",
     "CropToMaskWithPadding": "Crop to Mask (with Padding)",
     "SimpleCropToMaskWithPadding": "Simple Crop to Mask (with Padding) ⚡",
+    "BBoxReposition": "BBox Reposition 📐",
+    "BBoxEditor": "BBox Editor ✏️",
+    "PatchUpscale": "Patch Upscale 🔍",
+    "PatchFit": "Patch Fit 📦",
 }
 

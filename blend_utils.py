@@ -52,9 +52,31 @@ class BlendModeUtility:
         print(f"\n{'='*60}")
         print(f"Blend Mode Utility - {mode.upper()}")
         print(f"{'='*60}")
+        print(f"Base: {base.shape}")
+        print(f"Blend: {blend.shape}")
+        
+        # Match channel count first
+        base_channels = base.shape[3]
+        blend_channels = blend.shape[3]
+        
+        if base_channels != blend_channels:
+            print(f"  Channel mismatch: base={base_channels}, blend={blend_channels}")
+            if base_channels == 3 and blend_channels == 4:
+                # Base is RGB, blend is RGBA - drop alpha from blend
+                blend = blend[:, :, :, :3]
+                print(f"  Dropped alpha channel from blend layer")
+            elif base_channels == 4 and blend_channels == 3:
+                # Base is RGBA, blend is RGB - add alpha to blend
+                alpha_channel = torch.ones((blend.shape[0], blend.shape[1], blend.shape[2], 1), 
+                                          device=blend.device, dtype=blend.dtype)
+                blend = torch.cat([blend, alpha_channel], dim=-1)
+                print(f"  Added alpha channel to blend layer")
+            else:
+                print(f"  Warning: Unhandled channel mismatch")
         
         # Ensure same dimensions
-        if base.shape != blend.shape:
+        if base.shape[1:3] != blend.shape[1:3]:
+            print(f"  Resizing blend: {blend.shape[2]}×{blend.shape[1]} → {base.shape[2]}×{base.shape[1]}")
             blend = F.interpolate(
                 blend.permute(0, 3, 1, 2),
                 size=(base.shape[1], base.shape[2]),
