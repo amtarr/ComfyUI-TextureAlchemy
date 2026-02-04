@@ -3423,15 +3423,20 @@ class PatchUpscale:
                     "default": "bicubic",
                     "tooltip": "Interpolation method for upscaling"
                 }),
+            },
+            "optional": {
+                "mask": ("MASK", {
+                    "tooltip": "Optional mask to upscale with image"
+                }),
             }
         }
     
-    RETURN_TYPES = ("IMAGE", "PATCH_SCALE_DATA", "STRING")
-    RETURN_NAMES = ("upscaled_image", "scale_data", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "PATCH_SCALE_DATA", "STRING")
+    RETURN_NAMES = ("upscaled_image", "upscaled_mask", "scale_data", "info")
     FUNCTION = "upscale_patch"
     CATEGORY = "Texture Alchemist/Inpainting"
     
-    def upscale_patch(self, image, target_megapixels, max_dimension, upscale_method):
+    def upscale_patch(self, image, target_megapixels, max_dimension, upscale_method, mask=None):
         """
         Upscale patch to target megapixels while preserving aspect ratio
         """
@@ -3505,6 +3510,41 @@ class PatchUpscale:
             upscaled = image
             print(f"  No upscaling needed")
         
+        # Upscale mask if provided
+        if mask is not None:
+            print(f"  Upscaling mask: {mask.shape}")
+            
+            # Ensure mask is in correct format
+            if len(mask.shape) == 3:  # (B, H, W)
+                mask_to_scale = mask.unsqueeze(1)  # (B, 1, H, W)
+            elif len(mask.shape) == 4:  # (B, H, W, C)
+                mask_to_scale = mask.permute(0, 3, 1, 2)  # (B, C, H, W)
+            else:
+                mask_to_scale = mask
+            
+            if new_width != width or new_height != height:
+                upscaled_mask = F.interpolate(
+                    mask_to_scale,
+                    size=(new_height, new_width),
+                    mode='bilinear',  # Always use bilinear for masks
+                    align_corners=False
+                )
+            else:
+                upscaled_mask = mask_to_scale
+            
+            # Convert back to (B, H, W) format
+            if len(mask.shape) == 3:
+                upscaled_mask = upscaled_mask.squeeze(1)
+            elif len(mask.shape) == 4:
+                upscaled_mask = upscaled_mask.permute(0, 2, 3, 1)
+            
+            print(f"  Upscaled mask: {upscaled_mask.shape}")
+        else:
+            # Create empty mask if none provided
+            upscaled_mask = torch.zeros((batch, new_height, new_width), 
+                                       device=image.device, dtype=image.dtype)
+            print(f"  No mask provided")
+        
         # Create scale data for PatchFit
         scale_data = {
             "original_width": width,
@@ -3521,7 +3561,7 @@ class PatchUpscale:
         print(f"✓ Scale data saved for PatchFit")
         print("="*60 + "\n")
         
-        return (upscaled, scale_data, info)
+        return (upscaled, upscaled_mask, scale_data, info)
 
 
 class PatchFit:
@@ -3541,15 +3581,20 @@ class PatchFit:
                     "default": "area",
                     "tooltip": "Interpolation method for downscaling (area is best for downscaling)"
                 }),
+            },
+            "optional": {
+                "mask": ("MASK", {
+                    "tooltip": "Optional mask to downscale with image"
+                }),
             }
         }
     
-    RETURN_TYPES = ("IMAGE", "STRING")
-    RETURN_NAMES = ("fitted_image", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "STRING")
+    RETURN_NAMES = ("fitted_image", "fitted_mask", "info")
     FUNCTION = "fit_patch"
     CATEGORY = "Texture Alchemist/Inpainting"
     
-    def fit_patch(self, image, scale_data, downscale_method):
+    def fit_patch(self, image, scale_data, downscale_method, mask=None):
         """
         Downscale processed patch back to original dimensions
         """
@@ -3605,12 +3650,47 @@ class PatchFit:
             fitted = image
             print(f"✓ Already at target size - no downscaling needed")
         
+        # Downscale mask if provided
+        if mask is not None:
+            print(f"  Downscaling mask: {mask.shape}")
+            
+            # Ensure mask is in correct format
+            if len(mask.shape) == 3:  # (B, H, W)
+                mask_to_scale = mask.unsqueeze(1)  # (B, 1, H, W)
+            elif len(mask.shape) == 4:  # (B, H, W, C)
+                mask_to_scale = mask.permute(0, 3, 1, 2)  # (B, C, H, W)
+            else:
+                mask_to_scale = mask
+            
+            if width != target_width or height != target_height:
+                fitted_mask = F.interpolate(
+                    mask_to_scale,
+                    size=(target_height, target_width),
+                    mode='bilinear',  # Always use bilinear for masks
+                    align_corners=False
+                )
+            else:
+                fitted_mask = mask_to_scale
+            
+            # Convert back to original format
+            if len(mask.shape) == 3:
+                fitted_mask = fitted_mask.squeeze(1)
+            elif len(mask.shape) == 4:
+                fitted_mask = fitted_mask.permute(0, 2, 3, 1)
+            
+            print(f"  Downscaled mask: {fitted_mask.shape}")
+        else:
+            # Create empty mask if none provided
+            fitted_mask = torch.zeros((batch, target_height, target_width), 
+                                     device=image.device, dtype=image.dtype)
+            print(f"  No mask provided")
+        
         info = f"Fitted {width}×{height} → {target_width}×{target_height} (ready for stitching)"
         
         print(f"✓ Ready for stitching back into composition")
         print("="*60 + "\n")
         
-        return (fitted, info)
+        return (fitted, fitted_mask, info)
 
 
 class BBoxEditor:
