@@ -8,6 +8,25 @@ import torch.nn.functional as F
 import math
 
 
+def _rgb_to_hsv_tensor(rgb):
+    """Convert RGB tensor (..., 3) to HSV in 0-1. Used for color-to-mask logic."""
+    r = rgb[..., 0]
+    g = rgb[..., 1]
+    b = rgb[..., 2]
+    max_c = torch.max(torch.max(r, g), b)
+    min_c = torch.min(torch.min(r, g), b)
+    diff = max_c - min_c
+    h = torch.zeros_like(max_c)
+    mask = diff != 0
+    h = torch.where((max_c == r) & mask, ((g - b) / (diff + 1e-7)) % 6.0, h)
+    h = torch.where((max_c == g) & mask, ((b - r) / (diff + 1e-7)) + 2.0, h)
+    h = torch.where((max_c == b) & mask, ((r - g) / (diff + 1e-7)) + 4.0, h)
+    h = h / 6.0
+    s = torch.where(max_c != 0, diff / (max_c + 1e-7), torch.zeros_like(max_c))
+    v = max_c
+    return torch.stack([h, s, v], dim=-1)
+
+
 class EdgeWearMaskGenerator:
     """
     Generate edge wear masks from normal maps and curvature
@@ -835,14 +854,166 @@ class MaskCompositor:
         return (image, mask, mask_preview)
 
 
+class CustomColorToMask:
+    """
+    Turn the selected color (hex) into a mask. Use the color picker or eyedropper
+    widget to pick a color from your image or screen.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "color": ("STRING", {
+                    "default": "#FF0000",
+                    "tooltip": "Target color in hex (#RRGGBB). Use 🎨 Pick Color or 💧 Eyedropper below to select.",
+                }),
+                "tolerance": ("FLOAT", {
+                    "default": 0.2,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Color matching tolerance",
+                }),
+                "feather": ("FLOAT", {
+                    "default": 0.1,
+                    "min": 0.0,
+                    "max": 0.5,
+                    "step": 0.01,
+                    "display": "number",
+                    "tooltip": "Edge softness",
+                }),
+                "mode": (["rgb", "hsv", "luminance"], {
+                    "default": "rgb",
+                    "tooltip": "Color distance mode",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("MASK",)
+    RETURN_NAMES = ("mask",)
+    FUNCTION = "color_to_mask"
+    CATEGORY = "Texture Alchemist/Masks"
+
+    def color_to_mask(self, image, color, tolerance, feather, mode):
+        batch, height, width, channels = image.shape
+        device = image.device
+        dtype = image.dtype
+
+        color = str(color).strip().lstrip("#")
+        if len(color) < 6:
+            return (torch.zeros((batch, height, width), device=device, dtype=dtype),)
+        try:
+            r = int(color[0:2], 16) / 255.0
+            g = int(color[2:4], 16) / 255.0
+            b = int(color[4:6], 16) / 255.0
+        except ValueError:
+            return (torch.zeros((batch, height, width), device=device, dtype=dtype),)
+
+        target = torch.tensor([r, g, b], device=device, dtype=dtype).view(1, 1, 1, 3)
+        if image.shape[-1] == 1:
+            image = image.repeat(1, 1, 1, 3)
+        img_rgb = image[:, :, :, :3]
+
+        if mode == "rgb":
+            diff = img_rgb - target
+            distance = torch.sqrt((diff * diff).sum(dim=3, keepdim=True)) / math.sqrt(3.0)
+        elif mode == "hsv":
+            hsv_image = _rgb_to_hsv_tensor(img_rgb)
+            hsv_target = _rgb_to_hsv_tensor(target)
+            h_diff = torch.abs(hsv_image[:, :, :, 0:1] - hsv_target[:, :, :, 0:1])
+            h_diff = torch.min(h_diff, 1.0 - h_diff) * 2.0
+            s_diff = torch.abs(hsv_image[:, :, :, 1:2] - hsv_target[:, :, :, 1:2])
+            v_diff = torch.abs(hsv_image[:, :, :, 2:3] - hsv_target[:, :, :, 2:3])
+            distance = torch.sqrt(h_diff * h_diff + s_diff * s_diff + v_diff * v_diff) / math.sqrt(3.0)
+        else:
+            lum_img = 0.299 * img_rgb[:, :, :, 0:1] + 0.587 * img_rgb[:, :, :, 1:2] + 0.114 * img_rgb[:, :, :, 2:3]
+            lum_t = 0.299 * r + 0.587 * g + 0.114 * b
+            distance = torch.abs(lum_img - lum_t)
+
+        mask = 1.0 - torch.clamp(distance / (tolerance + 1e-7), 0.0, 1.0)
+        if feather > 0.0:
+            mask = torch.where(
+                mask > (1.0 - feather),
+                mask,
+                torch.where(
+                    mask < feather,
+                    torch.zeros_like(mask),
+                    (mask - feather) / (1.0 - 2.0 * feather),
+                ),
+            )
+        mask = torch.clamp(mask.squeeze(-1), 0.0, 1.0)
+        return (mask,)
+
+
+class ShuffleMask:
+    """
+    Extract one channel (red, green, blue, or alpha) as a black-and-white mask.
+    The channel can be chosen via the dropdown or overridden by connecting an
+    integer: 0=red, 1=green, 2=blue, 3=alpha (e.g. from an LLM or logic node).
+    """
+
+    CHANNELS = ["red", "green", "blue", "alpha"]
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "channel": (cls.CHANNELS, {
+                    "default": "red",
+                    "tooltip": "Channel to use as mask. Overridden when channel_index is connected.",
+                }),
+            },
+            "optional": {
+                "channel_index": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 3,
+                    "forceInput": True,
+                    "tooltip": "Connect an integer to override the dropdown: 0=red, 1=green, 2=blue, 3=alpha (e.g. from LLM).",
+                }),
+            }
+        }
+
+    RETURN_TYPES = ("MASK",)
+    RETURN_NAMES = ("mask",)
+    FUNCTION = "extract"
+    CATEGORY = "Texture Alchemist/Masks"
+
+    def extract(self, image, channel, channel_index=None):
+        batch, height, width, channels = image.shape
+        device = image.device
+        dtype = image.dtype
+
+        # Resolve channel index: connected INT overrides dropdown
+        if channel_index is not None:
+            idx = int(channel_index) if not isinstance(channel_index, (list, tuple)) else int(channel_index[0])
+            idx = max(0, min(3, idx))
+        else:
+            name_to_idx = {"red": 0, "green": 1, "blue": 2, "alpha": 3}
+            idx = name_to_idx.get(channel, 0)
+
+        # Extract channel; if alpha requested but image has no alpha, use ones (opaque)
+        if idx < channels:
+            mask = image[:, :, :, idx : idx + 1].squeeze(-1)  # (B, H, W)
+        else:
+            mask = torch.ones((batch, height, width), device=device, dtype=dtype)
+        return (mask,)
+
+
 # Node registration
 NODE_CLASS_MAPPINGS = {
     "EdgeWearMaskGenerator": EdgeWearMaskGenerator,
     "DirtGrimeMaskGenerator": DirtGrimeMaskGenerator,
     "GradientMaskGenerator": GradientMaskGenerator,
     "ColorSelectionMask": ColorSelectionMask,
+    "CustomColorToMask": CustomColorToMask,
     "ImageMaskCombiner": ImageMaskCombiner,
     "MaskCompositor": MaskCompositor,
+    "ShuffleMask": ShuffleMask,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -850,7 +1021,9 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "DirtGrimeMaskGenerator": "Dirt/Grime Mask Generator",
     "GradientMaskGenerator": "Gradient Mask Generator",
     "ColorSelectionMask": "Color Selection Mask",
+    "CustomColorToMask": "Custom Color to Mask",
     "ImageMaskCombiner": "Image + Mask Combiner",
     "MaskCompositor": "Mask Compositor (Interactive)",
+    "ShuffleMask": "Shuffle Mask",
 }
 

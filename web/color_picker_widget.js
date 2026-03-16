@@ -9,7 +9,7 @@ app.registerExtension({
     name: "TextureAlchemy.ColorPickerWidget",
     
     async beforeRegisterNodeDef(nodeType, nodeData, app) {
-        if (nodeData.name === "ColorImage" || nodeData.name === "ColorCode") {
+        if (nodeData.name === "ColorImage" || nodeData.name === "ColorCode" || nodeData.name === "CustomColorToMask") {
             const onNodeCreated = nodeType.prototype.onNodeCreated;
             
             nodeType.prototype.onNodeCreated = function() {
@@ -332,7 +332,7 @@ const originalDrawNodeShape = LGraphCanvas.prototype.drawNodeShape;
 LGraphCanvas.prototype.drawNodeShape = function(node, ctx, size, fgcolor, bgcolor, selected, mouse_over) {
     const result = originalDrawNodeShape.apply(this, arguments);
     
-    if (node.type === "ColorImage" || node.type === "ColorCode") {
+    if (node.type === "ColorImage" || node.type === "ColorCode" || node.type === "CustomColorToMask") {
         // Get current color from widget
         const colorWidget = node.widgets?.find(w => w.name === "color");
         const currentColor = node._previewColor || colorWidget?.value || "#FF0000";

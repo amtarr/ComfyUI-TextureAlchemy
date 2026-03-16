@@ -60,6 +60,14 @@ from .relight_utils import NODE_DISPLAY_NAME_MAPPINGS as RELIGHT_DISPLAY_MAPPING
 from .environment_utils import NODE_CLASS_MAPPINGS as ENVIRONMENT_CLASS_MAPPINGS
 from .environment_utils import NODE_DISPLAY_NAME_MAPPINGS as ENVIRONMENT_DISPLAY_MAPPINGS
 
+# Batch and prep
+from .batch_prep import NODE_CLASS_MAPPINGS as BATCH_PREP_CLASS_MAPPINGS
+from .batch_prep import NODE_DISPLAY_NAME_MAPPINGS as BATCH_PREP_DISPLAY_MAPPINGS
+
+# Shuffle custom colors
+from .shuffle_custom_colors import NODE_CLASS_MAPPINGS as SHUFFLE_COLORS_CLASS_MAPPINGS
+from .shuffle_custom_colors import NODE_DISPLAY_NAME_MAPPINGS as SHUFFLE_COLORS_DISPLAY_MAPPINGS
+
 # Merge all node mappings
 NODE_CLASS_MAPPINGS = {
     # Core
@@ -89,6 +97,10 @@ NODE_CLASS_MAPPINGS = {
     # Lighting
     **RELIGHT_CLASS_MAPPINGS,
     **ENVIRONMENT_CLASS_MAPPINGS,
+    # Batch
+    **BATCH_PREP_CLASS_MAPPINGS,
+    # Shuffle
+    **SHUFFLE_COLORS_CLASS_MAPPINGS,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -119,6 +131,10 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     # Lighting
     **RELIGHT_DISPLAY_MAPPINGS,
     **ENVIRONMENT_DISPLAY_MAPPINGS,
+    # Batch
+    **BATCH_PREP_DISPLAY_MAPPINGS,
+    # Shuffle
+    **SHUFFLE_COLORS_DISPLAY_MAPPINGS,
 }
 
 # Tell ComfyUI where to find our web/JS files
