@@ -7,6 +7,56 @@ import torch
 import torch.nn.functional as F
 
 
+def _fill_pad_corners_from_crop(
+    padded: torch.Tensor, cropped: torch.Tensor, y_off: int, x_off: int, h: int, w: int
+) -> None:
+    """
+    In-place. When extending a crop to a larger canvas, edge/mirror side fills
+    do not cover the four corner rectangles; they stay at the initial value (e.g. black).
+    Replicate the crop's four corner colors into those corner bands (common with pad to square).
+    """
+    if h < 1 or w < 1:
+        return
+    Hp, Wp = int(padded.shape[1]), int(padded.shape[2])
+    y_end, x_end = y_off + h, x_off + w
+    if y_off > 0 and x_off > 0:
+        padded[:, :y_off, :x_off, :] = cropped[:, 0:1, 0:1, :].repeat(1, y_off, x_off, 1)
+    if y_off > 0 and x_end < Wp:
+        tw = Wp - x_end
+        if tw > 0:
+            padded[:, :y_off, x_end:Wp, :] = cropped[:, 0:1, w - 1 : w, :].repeat(1, y_off, tw, 1)
+    if y_end < Hp and x_off > 0:
+        bh = Hp - y_end
+        if bh > 0:
+            padded[:, y_end:Hp, :x_off, :] = cropped[:, h - 1 : h, 0:1, :].repeat(1, bh, x_off, 1)
+    if y_end < Hp and x_end < Wp:
+        tw, bh = Wp - x_end, Hp - y_end
+        if tw > 0 and bh > 0:
+            padded[:, y_end:Hp, x_end:Wp, :] = cropped[:, h - 1 : h, w - 1 : w, :].repeat(1, bh, tw, 1)
+
+
+def _source_window_square(
+    x_min: int, y_min: int, crop_w: int, crop_h: int, padding: int, image_width: int, image_height: int
+) -> tuple[int, int, int]:
+    """
+    Center a square in the full image on the mask bounds, side
+    L = max(cw, ch) + 2*padding, clamped to the largest square that fits.
+    Returns (x0, y0, L) in source image coordinates.
+    """
+    l = max(crop_w, crop_h) + 2 * padding
+    max_l = min(image_width, image_height)
+    l = min(l, max_l)
+    if l < 1:
+        l = 1
+    cx = x_min + 0.5 * crop_w
+    cy = y_min + 0.5 * crop_h
+    x0 = int(round(cx - 0.5 * l))
+    y0 = int(round(cy - 0.5 * l))
+    x0 = max(0, min(x0, image_width - l))
+    y0 = max(0, min(y0, image_height - l))
+    return int(x0), int(y0), int(l)
+
+
 class SeamlessTiling:
     """
     Make textures tileable using various methods
@@ -2660,9 +2710,9 @@ class CropToMaskWithPadding:
                     "default": False,
                     "tooltip": "Expand to square canvas (uses longest dimension)"
                 }),
-                "padding_color": (["black", "white", "mirror", "edge_extend", "average", "custom"], {
+                "padding_color": (["black", "white", "mirror", "edge_extend", "from_crop", "use_image", "average", "custom"], {
                     "default": "black",
-                    "tooltip": "How to fill padding area"
+                    "tooltip": "use_image (with pad to square): crop a square from the full input, centered on the mask—real image pixels, no solid/mirror. Other modes: from_crop/edge/mirror = fill from the tight mask crop; black/white/average/custom = solid/avg"
                 }),
                 "custom_color": ("STRING", {
                     "default": "#000000",
@@ -2676,8 +2726,19 @@ class CropToMaskWithPadding:
             }
         }
     
-    RETURN_TYPES = ("IMAGE", "MASK", "INT", "INT", "INT", "INT", "BBOX_DATA", "STRING")
-    RETURN_NAMES = ("image", "mask", "original_width", "original_height", "crop_x", "crop_y", "bbox_data", "info")
+    RETURN_TYPES = ("IMAGE", "MASK", "INT", "INT", "INT", "INT", "INT", "INT", "BBOX_DATA", "STRING")
+    RETURN_NAMES = (
+        "image",
+        "mask",
+        "original_width",
+        "original_height",
+        "bbox_x",
+        "bbox_y",
+        "bbox_width",
+        "bbox_height",
+        "bbox_data",
+        "info",
+    )
     FUNCTION = "crop_and_pad"
     CATEGORY = "Texture Alchemist/Texture"
     
@@ -2758,7 +2819,7 @@ class CropToMaskWithPadding:
                 "original_width": width,
                 "original_height": height
             }
-            return (image, mask, width, height, 0, 0, bbox_data, "Empty mask")
+            return (image, mask, width, height, 0, 0, width, height, bbox_data, "Empty mask")
         
         # Get bounding box
         y_min = nonzero[:, 0].min().item()
@@ -2791,6 +2852,39 @@ class CropToMaskWithPadding:
         
         # Add padding (expand canvas)
         if padding > 0 or pad_to_square:
+            fill_mode = padding_color
+            if padding_color == "use_image" and not pad_to_square:
+                fill_mode = "from_crop"
+
+            # Square window from the full input (centered on mask) — no synthetic fill
+            if padding_color == "use_image" and pad_to_square:
+                x0, y0, l = _source_window_square(
+                    x_min, y_min, crop_width, crop_height, padding, width, height
+                )
+                print(f"\n✓ use_image: square crop from full frame at ({x0},{y0}), size {l}×{l}")
+                result_image = image[:, y0 : y0 + l, x0 : x0 + l, :]
+                out_mask2 = mask_2d[y0 : y0 + l, x0 : x0 + l]
+                if invert_mask:
+                    out_mask2 = 1.0 - out_mask2
+                result_mask = out_mask2.unsqueeze(0)
+                final_width = final_height = l
+                bbox_data = {
+                    "x": x0,
+                    "y": y0,
+                    "width": final_width,
+                    "height": final_height,
+                    "original_width": width,
+                    "original_height": height
+                }
+                info_lines = [
+                    f"Original: {width}×{height}",
+                    f"Mask BBox: {crop_width}×{crop_height} at ({x_min},{y_min})",
+                    f"Full-frame square: {l}×{l} at ({x0},{y0})"
+                ]
+                info_string = " | ".join(info_lines)
+                print(f"\n✓ Output: {result_image.shape}, bbox ({x0},{y0}) {l}×{l}\n" + "="*60 + "\n")
+                return (result_image, result_mask, width, height, x0, y0, l, l, bbox_data, info_string)
+
             # Calculate final dimensions
             if pad_to_square:
                 max_dim = max(crop_width, crop_height)
@@ -2802,20 +2896,20 @@ class CropToMaskWithPadding:
             
             print(f"\n✓ Expanding canvas:")
             print(f"  From: {crop_width} × {crop_height}")
-            print(f"  To: {final_width} × {final_height}")
+            print(f"  To: {final_width} × {final_height} (mode={fill_mode})")
             
             # Create padded canvas
-            if padding_color == "black":
+            if fill_mode == "black":
                 padded_image = torch.zeros((batch, final_height, final_width, channels), 
                                           device=device, dtype=dtype)
                 padded_mask = torch.zeros((final_height, final_width), 
                                          device=device, dtype=dtype)
-            elif padding_color == "white":
+            elif fill_mode == "white":
                 padded_image = torch.ones((batch, final_height, final_width, channels), 
                                          device=device, dtype=dtype)
                 padded_mask = torch.zeros((final_height, final_width), 
                                          device=device, dtype=dtype)
-            elif padding_color == "average":
+            elif fill_mode == "average":
                 # Calculate average color of the cropped image
                 avg_color = cropped_image.mean(dim=[1, 2], keepdim=True)  # Average across H,W
                 padded_image = avg_color.expand(batch, final_height, final_width, channels).clone()
@@ -2860,12 +2954,12 @@ class CropToMaskWithPadding:
             padded_mask[y_offset:y_offset+crop_height, x_offset:x_offset+crop_width] = cropped_mask
             
             # Apply padding style
-            if padding_color == "mirror":
+            if fill_mode == "mirror":
                 padded_image = self._apply_mirror_padding(
                     padded_image, cropped_image, 
                     y_offset, x_offset, crop_height, crop_width
                 )
-            elif padding_color == "edge_extend":
+            elif fill_mode in ("edge_extend", "from_crop"):
                 padded_image = self._apply_edge_extend(
                     padded_image, cropped_image,
                     y_offset, x_offset, crop_height, crop_width
@@ -2879,10 +2973,22 @@ class CropToMaskWithPadding:
             final_width = crop_width
             final_height = crop_height
         
-        # Create bundled bbox data (for SimpleInpaintStitch compatibility)
+        # Top-left in original of the *output* canvas for stitch: padded canvas extends
+        # (x_offset, y_offset) left/above the tight mask crop, so origin is not (x_min, y_min)
+        if (padding > 0 or pad_to_square) and not (padding_color == "use_image" and pad_to_square):
+            y_off = (final_height - crop_height) // 2
+            x_off = (final_width - crop_width) // 2
+            stitch_x = x_min - x_off
+            stitch_y = y_min - y_off
+            print(f"✓ Stitch origin (padded): ({stitch_x}, {stitch_y})  [tight mask: ({x_min}, {y_min})]")
+        else:
+            stitch_x = x_min
+            stitch_y = y_min
+        
+        # Create bundled bbox data (for SimpleInpaintStitch / InpaintStitcher + bbox)
         bbox_data = {
-            "x": x_min,
-            "y": y_min,
+            "x": stitch_x,
+            "y": stitch_y,
             "width": final_width,
             "height": final_height,
             "original_width": width,
@@ -2892,9 +2998,8 @@ class CropToMaskWithPadding:
         # Create info string
         info_lines = [
             f"Original: {width}×{height}",
-            f"Crop: {crop_width}×{crop_height}",
-            f"Final: {final_width}×{final_height}",
-            f"Position: ({x_min},{y_min})"
+            f"Mask (tight): {crop_width}×{crop_height} at ({x_min},{y_min})",
+            f"Stitch: {final_width}×{final_height} at ({stitch_x},{stitch_y})"
         ]
         info_string = " | ".join(info_lines)
         
@@ -2903,11 +3008,11 @@ class CropToMaskWithPadding:
         print(f"  Result mask: {result_mask.shape}")
         print(f"  Original dimensions: {width}×{height}")
         print(f"  Final dimensions: {final_width}×{final_height}")
-        print(f"  Crop position: ({x_min}, {y_min})")
-        print(f"  Canvas reduced: {width}×{height} → {final_width}×{final_height}")
+        print(f"  Stitch in original: ({stitch_x}, {stitch_y})")
+        print(f"  Canvas (output): {width}×{height} → {final_width}×{final_height}")
         print("="*60 + "\n")
         
-        return (result_image, result_mask, width, height, x_min, y_min, bbox_data, info_string)
+        return (result_image, result_mask, width, height, stitch_x, stitch_y, final_width, final_height, bbox_data, info_string)
     
     def _apply_mirror_padding(self, padded, cropped, y_off, x_off, h, w):
         """Mirror edges for padding"""
@@ -2941,6 +3046,7 @@ class CropToMaskWithPadding:
                 cropped[:, :, w-mirror_w:w, :], [2]
             )
         
+        _fill_pad_corners_from_crop(padded, cropped, y_off, x_off, h, w)
         return padded
     
     def _apply_edge_extend(self, padded, cropped, y_off, x_off, h, w):
@@ -2967,6 +3073,7 @@ class CropToMaskWithPadding:
                 1, 1, padded.shape[2] - (x_off + w), 1
             )
         
+        _fill_pad_corners_from_crop(padded, cropped, y_off, x_off, h, w)
         return padded
 
 
@@ -2995,9 +3102,9 @@ class SimpleCropToMaskWithPadding:
                     "default": False,
                     "tooltip": "Expand to square canvas (uses longest dimension)"
                 }),
-                "padding_color": (["black", "white", "mirror", "edge_extend", "average", "custom"], {
+                "padding_color": (["black", "white", "mirror", "edge_extend", "from_crop", "use_image", "average", "custom"], {
                     "default": "black",
-                    "tooltip": "How to fill padding area"
+                    "tooltip": "use_image (with pad to square): square crop from the full input, centered on the mask. Other: from_crop/edge/mirror from tight crop; black/white/average/custom = solid/avg"
                 }),
                 "custom_color": ("STRING", {
                     "default": "#000000",
@@ -3090,93 +3197,94 @@ class SimpleCropToMaskWithPadding:
         
         # Add padding (expand canvas)
         if padding > 0 or pad_to_square:
-            # Calculate final dimensions
-            if pad_to_square:
-                max_dim = max(bbox_width, bbox_height)
-                final_width = max_dim + (padding * 2)
-                final_height = max_dim + (padding * 2)
+            fill_mode = padding_color
+            if padding_color == "use_image" and not pad_to_square:
+                fill_mode = "from_crop"
+
+            if padding_color == "use_image" and pad_to_square:
+                x0, y0, l = _source_window_square(
+                    bbox_x, bbox_y, bbox_width, bbox_height, padding, width, height
+                )
+                print(f"✓ use_image: full-frame square at ({x0},{y0}), {l}×{l}")
+                result_image = image[:, y0 : y0 + l, x0 : x0 + l, :]
+                # Same mask basis as tight crop: mask_2d after optional user invert, no second flip
+                result_mask = mask_2d[y0 : y0 + l, x0 : x0 + l].unsqueeze(0)
+                final_width = final_height = l
+                bbox_x, bbox_y = x0, y0
             else:
-                final_width = bbox_width + (padding * 2)
-                final_height = bbox_height + (padding * 2)
-            
-            print(f"✓ Expanding: {bbox_width}×{bbox_height} → {final_width}×{final_height}")
-            
-            # Create padded canvas
-            if padding_color == "black":
-                padded_image = torch.zeros((batch, final_height, final_width, channels), 
-                                          device=device, dtype=dtype)
-                padded_mask = torch.zeros((final_height, final_width), 
-                                         device=device, dtype=dtype)
-            elif padding_color == "white":
-                padded_image = torch.ones((batch, final_height, final_width, channels), 
-                                         device=device, dtype=dtype)
-                padded_mask = torch.zeros((final_height, final_width), 
-                                         device=device, dtype=dtype)
-            elif padding_color == "average":
-                # Calculate average color of the cropped image
-                avg_color = cropped_image.mean(dim=[1, 2], keepdim=True)  # Average across H,W
-                padded_image = avg_color.expand(batch, final_height, final_width, channels).clone()
-                padded_mask = torch.zeros((final_height, final_width), 
-                                         device=device, dtype=dtype)
-                print(f"✓ Using average color: R={avg_color[0,0,0,0]:.3f}, G={avg_color[0,0,0,1]:.3f}, B={avg_color[0,0,0,2]:.3f}")
-            elif padding_color == "custom":
-                # Parse hex color
-                hex_color = custom_color.strip().lstrip('#')
-                if len(hex_color) == 6:
-                    r = int(hex_color[0:2], 16) / 255.0
-                    g = int(hex_color[2:4], 16) / 255.0
-                    b = int(hex_color[4:6], 16) / 255.0
-                    # Create color tensor [1, 1, 1, channels]
-                    if channels == 4:
-                        color = torch.tensor([r, g, b, 1.0], device=device, dtype=dtype).view(1, 1, 1, 4)
-                    else:
-                        color = torch.tensor([r, g, b], device=device, dtype=dtype).view(1, 1, 1, 3)
-                    padded_image = color.expand(batch, final_height, final_width, channels).clone()
-                    padded_mask = torch.zeros((final_height, final_width), 
-                                             device=device, dtype=dtype)
-                    print(f"✓ Using custom color #{hex_color}: R={r:.3f}, G={g:.3f}, B={b:.3f}")
+                if pad_to_square:
+                    max_dim = max(bbox_width, bbox_height)
+                    final_width = max_dim + (padding * 2)
+                    final_height = max_dim + (padding * 2)
                 else:
-                    print(f"⚠️ Invalid hex color '{custom_color}', using black")
+                    final_width = bbox_width + (padding * 2)
+                    final_height = bbox_height + (padding * 2)
+            
+                print(f"✓ Expanding: {bbox_width}×{bbox_height} → {final_width}×{final_height} (mode={fill_mode})")
+            
+                if fill_mode == "black":
                     padded_image = torch.zeros((batch, final_height, final_width, channels), 
                                               device=device, dtype=dtype)
                     padded_mask = torch.zeros((final_height, final_width), 
                                              device=device, dtype=dtype)
-            else:
-                # For mirror and edge_extend, start with zeros
-                padded_image = torch.zeros((batch, final_height, final_width, channels), 
-                                          device=device, dtype=dtype)
-                padded_mask = torch.zeros((final_height, final_width), 
-                                         device=device, dtype=dtype)
+                elif fill_mode == "white":
+                    padded_image = torch.ones((batch, final_height, final_width, channels), 
+                                             device=device, dtype=dtype)
+                    padded_mask = torch.zeros((final_height, final_width), 
+                                             device=device, dtype=dtype)
+                elif fill_mode == "average":
+                    avg_color = cropped_image.mean(dim=[1, 2], keepdim=True)
+                    padded_image = avg_color.expand(batch, final_height, final_width, channels).clone()
+                    padded_mask = torch.zeros((final_height, final_width), 
+                                             device=device, dtype=dtype)
+                    print(f"✓ Using average color: R={avg_color[0,0,0,0]:.3f}, G={avg_color[0,0,0,1]:.3f}, B={avg_color[0,0,0,2]:.3f}")
+                elif padding_color == "custom":
+                    hex_color = custom_color.strip().lstrip('#')
+                    if len(hex_color) == 6:
+                        r = int(hex_color[0:2], 16) / 255.0
+                        g = int(hex_color[2:4], 16) / 255.0
+                        b = int(hex_color[4:6], 16) / 255.0
+                        if channels == 4:
+                            color = torch.tensor([r, g, b, 1.0], device=device, dtype=dtype).view(1, 1, 1, 4)
+                        else:
+                            color = torch.tensor([r, g, b], device=device, dtype=dtype).view(1, 1, 1, 3)
+                        padded_image = color.expand(batch, final_height, final_width, channels).clone()
+                        padded_mask = torch.zeros((final_height, final_width), 
+                                                 device=device, dtype=dtype)
+                        print(f"✓ Using custom color #{hex_color}: R={r:.3f}, G={g:.3f}, B={b:.3f}")
+                    else:
+                        print(f"⚠️ Invalid hex color '{custom_color}', using black")
+                        padded_image = torch.zeros((batch, final_height, final_width, channels), 
+                                                  device=device, dtype=dtype)
+                        padded_mask = torch.zeros((final_height, final_width), 
+                                                 device=device, dtype=dtype)
+                else:
+                    padded_image = torch.zeros((batch, final_height, final_width, channels), 
+                                              device=device, dtype=dtype)
+                    padded_mask = torch.zeros((final_height, final_width), 
+                                             device=device, dtype=dtype)
             
-            # Calculate center position (where original content will be placed)
-            y_offset = (final_height - bbox_height) // 2
-            x_offset = (final_width - bbox_width) // 2
+                y_offset = (final_height - bbox_height) // 2
+                x_offset = (final_width - bbox_width) // 2
+                padded_image[:, y_offset:y_offset+bbox_height, x_offset:x_offset+bbox_width, :] = cropped_image
+                padded_mask[y_offset:y_offset+bbox_height, x_offset:x_offset+bbox_width] = cropped_mask_2d
             
-            # Place cropped content in center
-            padded_image[:, y_offset:y_offset+bbox_height, x_offset:x_offset+bbox_width, :] = cropped_image
-            padded_mask[y_offset:y_offset+bbox_height, x_offset:x_offset+bbox_width] = cropped_mask_2d
+                if fill_mode == "mirror":
+                    padded_image = self._apply_mirror_padding(
+                        padded_image, cropped_image, 
+                        y_offset, x_offset, bbox_height, bbox_width
+                    )
+                elif fill_mode in ("edge_extend", "from_crop"):
+                    padded_image = self._apply_edge_extend(
+                        padded_image, cropped_image,
+                        y_offset, x_offset, bbox_height, bbox_width
+                    )
             
-            # Apply padding style
-            if padding_color == "mirror":
-                padded_image = self._apply_mirror_padding(
-                    padded_image, cropped_image, 
-                    y_offset, x_offset, bbox_height, bbox_width
-                )
-            elif padding_color == "edge_extend":
-                padded_image = self._apply_edge_extend(
-                    padded_image, cropped_image,
-                    y_offset, x_offset, bbox_height, bbox_width
-                )
-            
-            result_image = padded_image
-            result_mask = padded_mask.unsqueeze(0)  # Add batch dim
-            
-            # CRITICAL: Adjust bbox position to account for padding offset
-            # The original content is now at (x_offset, y_offset) within the padded crop
-            # So we need to shift the bbox position back by this offset for proper alignment
-            bbox_x = bbox_x - x_offset
-            bbox_y = bbox_y - y_offset
-            print(f"✓ Adjusted bbox for padding: ({bbox_x}, {bbox_y})")
+                result_image = padded_image
+                result_mask = padded_mask.unsqueeze(0)
+                bbox_x = bbox_x - x_offset
+                bbox_y = bbox_y - y_offset
+                print(f"✓ Adjusted bbox for padding: ({bbox_x}, {bbox_y})")
         else:
             result_image = cropped_image
             result_mask = cropped_mask_2d.unsqueeze(0)
@@ -3237,6 +3345,7 @@ class SimpleCropToMaskWithPadding:
                 cropped[:, :, w-mirror_w:w, :], [2]
             )
         
+        _fill_pad_corners_from_crop(padded, cropped, y_off, x_off, h, w)
         return padded
     
     def _apply_edge_extend(self, padded, cropped, y_off, x_off, h, w):
@@ -3263,7 +3372,115 @@ class SimpleCropToMaskWithPadding:
                 1, 1, padded.shape[2] - (x_off + w), 1
             )
         
+        _fill_pad_corners_from_crop(padded, cropped, y_off, x_off, h, w)
         return padded
+
+
+class CropFromBboxData:
+    """
+    Crop an image to the rectangle in bbox_data (x, y, width, height in "original" space).
+    If the image is not the same size as original_width/height, the box is scaled before clamping
+    to the current image (useful if you resized the image after the bbox was created).
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "bbox_data": ("BBOX_DATA",),
+            },
+            "optional": {
+                "mask": ("MASK",),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "BBOX_DATA", "STRING")
+    RETURN_NAMES = ("cropped_image", "cropped_mask", "bbox_data", "info")
+    FUNCTION = "execute"
+    CATEGORY = "Texture Alchemist/Inpainting"
+
+    def execute(self, image, bbox_data, mask=None):
+        print("\n" + "="*60)
+        print("Crop from Bbox Data")
+        print("="*60)
+        b, h, w, c = image.shape
+        print(f"Image: {b}×{h}×{w}×{c}")
+
+        bw = int(bbox_data.get("width", 0) or 0)
+        bh = int(bbox_data.get("height", 0) or 0)
+        bx = int(bbox_data.get("x", 0) or 0)
+        by = int(bbox_data.get("y", 0) or 0)
+        orig_w = int(bbox_data.get("original_width", 0) or 0) or w
+        orig_h = int(bbox_data.get("original_height", 0) or 0) or h
+        if orig_w < 1:
+            orig_w = w
+        if orig_h < 1:
+            orig_h = h
+
+        m_full = self._mask_bhw_batched(mask, b, h, w, image.device, image.dtype)
+
+        if bw < 1 or bh < 1:
+            print("⚠️ Invalid width/height in bbox — using full image")
+            out = image
+            m_out = m_full if m_full is not None else torch.ones((b, h, w), device=image.device, dtype=image.dtype)
+        else:
+            if (orig_w, orig_h) == (w, h):
+                x0, y0, x1, y1 = bx, by, bx + bw, by + bh
+            else:
+                sx = w / float(orig_w)
+                sy = h / float(orig_h)
+                x0 = int(bx * sx)
+                y0 = int(by * sy)
+                x1 = int(round((bx + bw) * sx))
+                y1 = int(round((by + bh) * sy))
+                print(f"  Scaled from {orig_w}×{orig_h} to {w}×{h}: box ({x0},{y0})—({x1},{y1})")
+            x0, y0 = max(0, x0), max(0, y0)
+            x1, y1 = min(w, x1), min(h, y1)
+            if x0 >= x1 or y0 >= y1:
+                print("⚠️ Bbox out of range after clamp — using full image")
+                out, m_out = image, m_full
+            else:
+                out = image[:, y0:y1, x0:x1, :].contiguous()
+                m_out = m_full[:, y0:y1, x0:x1] if m_full is not None else torch.ones(
+                    (b, y1 - y0, x1 - x0), device=image.device, dtype=image.dtype
+                )
+        if m_out is None:
+            ch, cx = int(out.shape[1]), int(out.shape[2])
+            m_out = torch.ones((b, ch, cx), device=image.device, dtype=image.dtype)
+
+        ch, cx = int(out.shape[1]), int(out.shape[2])
+        out_bbox = {
+            "x": 0,
+            "y": 0,
+            "width": cx,
+            "height": ch,
+            "original_width": w,
+            "original_height": h,
+        }
+        info = f"Crop: {cx}×{ch} (source image {w}×{h})"
+        print(f"✓ {info}\n" + "="*60 + "\n")
+        return (out, m_out, out_bbox, info)
+
+    @staticmethod
+    def _mask_bhw_batched(mask, batch, h, w, device, dtype):
+        if mask is None:
+            return None
+        if len(mask.shape) == 2:
+            m = mask.unsqueeze(0)
+        elif len(mask.shape) == 3:
+            m = mask
+        elif len(mask.shape) == 4:
+            m = mask[:, :, :, 0]
+        else:
+            m = mask
+        if m.shape[0] == 1 and batch > 1:
+            m = m.expand(batch, -1, -1)
+        if m.shape[1] != h or m.shape[2] != w:
+            m = F.interpolate(m.unsqueeze(1), size=(h, w), mode="bilinear", align_corners=False).squeeze(1)
+        if m.shape[0] > batch:
+            m = m[:batch]
+        return m.to(device=device, dtype=dtype)
 
 
 # Node registration
@@ -3818,6 +4035,7 @@ NODE_CLASS_MAPPINGS = {
     "QwenImagePrep": QwenImagePrep,
     "CropToMaskWithPadding": CropToMaskWithPadding,
     "SimpleCropToMaskWithPadding": SimpleCropToMaskWithPadding,
+    "CropFromBboxData": CropFromBboxData,
     "BBoxReposition": BBoxReposition,
     "BBoxEditor": BBoxEditor,
     "PatchUpscale": PatchUpscale,
@@ -3843,6 +4061,7 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "QwenImagePrep": "Qwen Image Prep",
     "CropToMaskWithPadding": "Crop to Mask (with Padding)",
     "SimpleCropToMaskWithPadding": "Simple Crop to Mask (with Padding) ⚡",
+    "CropFromBboxData": "Crop (from Bbox Data) ⚡",
     "BBoxReposition": "BBox Reposition 📐",
     "BBoxEditor": "BBox Editor ✏️",
     "PatchUpscale": "Patch Upscale 🔍",
