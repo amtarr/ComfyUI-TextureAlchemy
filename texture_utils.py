@@ -3483,6 +3483,328 @@ class CropFromBboxData:
         return m.to(device=device, dtype=dtype)
 
 
+class ScaleImageToReferenceBbox:
+    """
+    Uniform scale from mask bbox vs reference W×H. Default canvas is reference_size:
+    output is exactly ref W×H with the scaled image centered on the subject (stitch window).
+    scaled_full keeps the whole scaled frame.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "reference_bbox": ("BBOX_DATA",),
+                "canvas": (["reference_size", "scaled_full"], {
+                    "default": "reference_size",
+                    "tooltip": "reference_size: output exactly ref W×H (stitch-friendly); scaled frame centered on subject. scaled_full: entire scaled image (W×S, H×S)"
+                }),
+                "match_mode": (["larger_side", "smaller_side", "width", "height", "area"], {
+                    "default": "larger_side",
+                    "tooltip": "larger_side=max(w,h ratios)—typical to match undersized edits; smaller_side=min; width/height=one axis; area=sqrt(ref area / src area)"
+                }),
+                "padding": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Extra pixels around mask bbox before resize"
+                }),
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert mask before bbox detection"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "BBOX_DATA", "STRING")
+    RETURN_NAMES = ("image", "mask", "bbox_data", "info")
+    FUNCTION = "execute"
+    CATEGORY = "Texture Alchemist/Inpainting"
+
+    def execute(self, image, mask, reference_bbox, canvas, match_mode, padding, invert_mask):
+        print("\n" + "="*60)
+        print("Scale Image to Reference Bbox")
+        print("="*60)
+        batch, height, width, channels = image.shape
+        device, dtype = image.device, image.dtype
+
+        tw = int(reference_bbox.get("width", 0) or 0)
+        th = int(reference_bbox.get("height", 0) or 0)
+        if tw < 1:
+            tw = 1
+        if th < 1:
+            th = 1
+
+        mask_2d = self._mask_to_2d(mask, height, width)
+        if invert_mask:
+            mask_2d = 1.0 - mask_2d
+
+        mask_binary = (mask_2d > 0.01).float()
+        nonzero = torch.nonzero(mask_binary, as_tuple=False)
+        if nonzero.shape[0] == 0:
+            print("⚠️ Empty mask — scale factor 1.0 (no change)")
+            s = 1.0
+            bx, by, bw, bh = 0, 0, width, height
+        else:
+            y_min = nonzero[:, 0].min().item()
+            y_max = nonzero[:, 0].max().item()
+            x_min = nonzero[:, 1].min().item()
+            x_max = nonzero[:, 1].max().item()
+            y_min = max(0, y_min - padding)
+            y_max = min(height - 1, y_max + padding)
+            x_min = max(0, x_min - padding)
+            x_max = min(width - 1, x_max + padding)
+            bx, by = x_min, y_min
+            bw = x_max - x_min + 1
+            bh = y_max - y_min + 1
+            sw, sh = float(max(1, bw)), float(max(1, bh))
+            rw, rh = float(tw), float(th)
+            if match_mode == "larger_side":
+                s = max(rw / sw, rh / sh)
+            elif match_mode == "smaller_side":
+                s = min(rw / sw, rh / sh)
+            elif match_mode == "width":
+                s = rw / sw
+            elif match_mode == "height":
+                s = rh / sh
+            else:
+                s = ((rw * rh) / (sw * sh)) ** 0.5
+            print(f"Subject bbox {bw}×{bh} at ({bx},{by}) → ref {tw}×{th}, S={s:.4f} ({match_mode})")
+
+        w2 = max(1, int(round(width * s)))
+        h2 = max(1, int(round(height * s)))
+        img_scaled = F.interpolate(
+            image.permute(0, 3, 1, 2), size=(h2, w2), mode="bilinear", align_corners=False
+        ).permute(0, 2, 3, 1)
+
+        m_bhw = CropFromBboxData._mask_bhw_batched(mask, batch, height, width, device, dtype)
+        if m_bhw is None:
+            m_bhw = torch.ones((batch, height, width), device=device, dtype=dtype)
+        m_scaled = F.interpolate(
+            m_bhw.unsqueeze(1), size=(h2, w2), mode="bilinear", align_corners=False
+        ).squeeze(1)
+
+        sx = w2 / float(max(1, width))
+        sy = h2 / float(max(1, height))
+        cx2 = (bx + 0.5 * bw) * sx
+        cy2 = (by + 0.5 * bh) * sy
+
+        if canvas == "reference_size":
+            img_out, m_out = self._composite_centered(
+                img_scaled, m_scaled, tw, th, cx2, cy2, device, dtype
+            )
+            out_w, out_h = tw, th
+            print(f"  Canvas: reference_size {tw}×{th}, centered on subject ({cx2:.1f},{cy2:.1f})")
+        else:
+            img_out, m_out = img_scaled, m_scaled
+            out_w, out_h = w2, h2
+            print(f"  Canvas: scaled_full {w2}×{h2}")
+
+        ow = int(reference_bbox.get("original_width", 0) or 0) or out_w
+        oh = int(reference_bbox.get("original_height", 0) or 0) or out_h
+        out_bbox = {
+            "x": 0,
+            "y": 0,
+            "width": out_w,
+            "height": out_h,
+            "original_width": ow,
+            "original_height": oh,
+        }
+        sbx = int(round(bx * sx))
+        sby = int(round(by * sy))
+        sbw = int(round(bw * sx))
+        sbh = int(round(bh * sy))
+        info = (
+            f"Out {out_w}×{out_h} ({canvas}) | scaled {w2}×{h2} S={s:.4f} | subject~{sbw}×{sbh}@({sbx},{sby}) "
+            f"| ref {tw}×{th} ({match_mode})"
+        )
+        print(f"✓ {info}\n" + "="*60 + "\n")
+        return (img_out, m_out, out_bbox, info)
+
+    @staticmethod
+    def _composite_centered(img, m, tw, th, cx2, cy2, device, dtype):
+        """Place scaled image on a tw×th canvas so (cx2, cy2) lands at canvas center."""
+        b, h2, w2, c = img.shape
+        out = torch.zeros((b, th, tw, c), device=device, dtype=dtype)
+        out_m = torch.zeros((b, th, tw), device=device, dtype=dtype)
+        ox0 = int(round(tw / 2.0 - cx2))
+        oy0 = int(round(th / 2.0 - cy2))
+        y1d, x1d = max(0, oy0), max(0, ox0)
+        y2d, x2d = min(th, oy0 + h2), min(tw, ox0 + w2)
+        y1s, x1s = y1d - oy0, x1d - ox0
+        y2s = y1s + (y2d - y1d)
+        x2s = x1s + (x2d - x1d)
+        if y2d > y1d and x2d > x1d:
+            out[:, y1d:y2d, x1d:x2d, :] = img[:, y1s:y2s, x1s:x2s, :]
+            out_m[:, y1d:y2d, x1d:x2d] = m[:, y1s:y2s, x1s:x2s]
+        return out, out_m
+
+    @staticmethod
+    def _mask_to_2d(mask, height, width):
+        if len(mask.shape) == 2:
+            mask_2d = mask
+        elif len(mask.shape) == 3:
+            mask_2d = mask[0]
+        else:
+            mask_2d = mask[0, :, :, 0]
+        if mask_2d.shape != (height, width):
+            if len(mask.shape) == 2:
+                mask_reshaped = mask_2d.unsqueeze(0).unsqueeze(0)
+            elif len(mask.shape) == 3:
+                mask_reshaped = mask.unsqueeze(1)
+            else:
+                mask_reshaped = mask.permute(0, 3, 1, 2)
+            mask_resized = F.interpolate(
+                mask_reshaped, size=(height, width), mode="bilinear", align_corners=False
+            )
+            mask_2d = mask_resized[0, 0]
+        return mask_2d
+
+
+class MatchSubjectToReferenceImage:
+    """
+    Compare mask bounding boxes on a reference image (e.g. pre–Qwen Edit) vs the
+    current image (e.g. post-edit, same canvas but smaller subject). Uniformly scale
+    the current image so the subject footprint matches the reference, then center
+    on the output canvas (same size as the current image) for stitch / overlay.
+    """
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mask": ("MASK",),
+                "reference_image": ("IMAGE",),
+                "reference_mask": ("MASK",),
+                "match_mode": (["larger_side", "smaller_side", "width", "height", "area"], {
+                    "default": "larger_side",
+                    "tooltip": "How to pick S from ref vs current subject bbox (same as Scale Image to Reference Bbox). larger_side: grow subject to match ref (typical after edit shrinks it)"
+                }),
+                "padding": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 500,
+                    "step": 1,
+                    "display": "number",
+                    "tooltip": "Padding around mask bbox on both images (pixels)"
+                }),
+                "invert_mask": ("BOOLEAN", {
+                    "default": False,
+                    "tooltip": "Invert both masks before bbox detection"
+                }),
+            },
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK", "BBOX_DATA", "STRING")
+    RETURN_NAMES = ("image", "mask", "bbox_data", "info")
+    FUNCTION = "execute"
+    CATEGORY = "Texture Alchemist/Inpainting"
+
+    def execute(self, image, mask, reference_image, reference_mask, match_mode, padding, invert_mask):
+        print("\n" + "="*60)
+        print("Match Subject to Reference Image")
+        print("="*60)
+        batch, h, w, c = image.shape
+        device, dtype = image.device, image.dtype
+
+        if reference_image.shape[1] != h or reference_image.shape[2] != w:
+            print(
+                f"  Note: reference_image {reference_image.shape[2]}×{reference_image.shape[1]} "
+                f"≠ current {w}×{h}; subject size uses reference_mask resampled to current canvas"
+            )
+
+        m_src = ScaleImageToReferenceBbox._mask_to_2d(mask, h, w)
+        m_ref = ScaleImageToReferenceBbox._mask_to_2d(reference_mask, h, w)
+        if invert_mask:
+            m_src = 1.0 - m_src
+            m_ref = 1.0 - m_ref
+
+        bs = self._bbox_from_mask(m_src, h, w, padding)
+        br = self._bbox_from_mask(m_ref, h, w, padding)
+        if bs is None or br is None:
+            print("⚠️ Empty mask on reference or current image — no scale change")
+            s = 1.0
+            bx_s, by_s, bw_s, bh_s = 0, 0, w, h
+            bx_r, by_r, bw_r, bh_r = 0, 0, w, h
+        else:
+            bx_s, by_s, bw_s, bh_s = bs
+            bx_r, by_r, bw_r, bh_r = br
+        sw, sh = float(max(1, bw_s)), float(max(1, bh_s))
+        rw, rh = float(max(1, bw_r)), float(max(1, bh_r))
+
+        if bs is not None and br is not None:
+            if match_mode == "larger_side":
+                s = max(rw / sw, rh / sh)
+            elif match_mode == "smaller_side":
+                s = min(rw / sw, rh / sh)
+            elif match_mode == "width":
+                s = rw / sw
+            elif match_mode == "height":
+                s = rh / sh
+            else:
+                s = ((rw * rh) / (sw * sh)) ** 0.5
+            print(f"Ref subject bbox {bw_r}×{bh_r} @({bx_r},{by_r}) | current {bw_s}×{bh_s} @({bx_s},{by_s}) → S={s:.4f} ({match_mode})")
+
+        w2 = max(1, int(round(w * s)))
+        h2 = max(1, int(round(h * s)))
+        img_scaled = F.interpolate(
+            image.permute(0, 3, 1, 2), size=(h2, w2), mode="bilinear", align_corners=False
+        ).permute(0, 2, 3, 1)
+
+        m_bhw = CropFromBboxData._mask_bhw_batched(mask, batch, h, w, device, dtype)
+        if m_bhw is None:
+            m_bhw = torch.ones((batch, h, w), device=device, dtype=dtype)
+        m_scaled = F.interpolate(
+            m_bhw.unsqueeze(1), size=(h2, w2), mode="bilinear", align_corners=False
+        ).squeeze(1)
+
+        sx = w2 / float(max(1, w))
+        sy = h2 / float(max(1, h))
+        cx2 = (bx_s + 0.5 * bw_s) * sx
+        cy2 = (by_s + 0.5 * bh_s) * sy
+
+        img_out, m_out = ScaleImageToReferenceBbox._composite_centered(
+            img_scaled, m_scaled, w, h, cx2, cy2, device, dtype
+        )
+
+        out_bbox = {
+            "x": 0,
+            "y": 0,
+            "width": w,
+            "height": h,
+            "original_width": w,
+            "original_height": h,
+        }
+        info = (
+            f"Canvas {w}×{h} | scaled {w2}×{h2} S={s:.4f} | ref subject {bw_r}×{bh_r} vs was {bw_s}×{bh_s} ({match_mode})"
+        )
+        print(f"✓ {info}\n" + "="*60 + "\n")
+        return (img_out, m_out, out_bbox, info)
+
+    @staticmethod
+    def _bbox_from_mask(mask_2d, height, width, padding):
+        mb = (mask_2d > 0.01).float()
+        nz = torch.nonzero(mb, as_tuple=False)
+        if nz.shape[0] == 0:
+            return None
+        y_min = nz[:, 0].min().item()
+        y_max = nz[:, 0].max().item()
+        x_min = nz[:, 1].min().item()
+        x_max = nz[:, 1].max().item()
+        y_min = max(0, y_min - padding)
+        y_max = min(height - 1, y_max + padding)
+        x_min = max(0, x_min - padding)
+        x_max = min(width - 1, x_max + padding)
+        bw = x_max - x_min + 1
+        bh = y_max - y_min + 1
+        return x_min, y_min, bw, bh
+
+
 # Node registration
 class BBoxReposition:
     """
@@ -4036,6 +4358,8 @@ NODE_CLASS_MAPPINGS = {
     "CropToMaskWithPadding": CropToMaskWithPadding,
     "SimpleCropToMaskWithPadding": SimpleCropToMaskWithPadding,
     "CropFromBboxData": CropFromBboxData,
+    "ScaleImageToReferenceBbox": ScaleImageToReferenceBbox,
+    "MatchSubjectToReferenceImage": MatchSubjectToReferenceImage,
     "BBoxReposition": BBoxReposition,
     "BBoxEditor": BBoxEditor,
     "PatchUpscale": PatchUpscale,
@@ -4062,6 +4386,8 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "CropToMaskWithPadding": "Crop to Mask (with Padding)",
     "SimpleCropToMaskWithPadding": "Simple Crop to Mask (with Padding) ⚡",
     "CropFromBboxData": "Crop (from Bbox Data) ⚡",
+    "ScaleImageToReferenceBbox": "Scale Image to Reference Bbox ⚡",
+    "MatchSubjectToReferenceImage": "Match Subject to Reference Image ⚡",
     "BBoxReposition": "BBox Reposition 📐",
     "BBoxEditor": "BBox Editor ✏️",
     "PatchUpscale": "Patch Upscale 🔍",
